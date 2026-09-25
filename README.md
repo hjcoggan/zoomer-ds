@@ -62,11 +62,15 @@ open -a mGBA zuma-gba.gba
 ```
 source/main.c     Game loop, input, rendering (sprites + tile backgrounds)
 source/chain.c    Ball chain logic: spawning, pushing, matching, roll-back combos
+source/sound.c    Music and sound effects on the GBA's PSG channels
 source/assets.c   Generated: track path, sine table, palettes, tiles, font
 include/          Headers (gba.h has the hardware registers)
 tools/gen_assets.py  Generates assets.c/assets.h and build/preview.png
 tests/            Host-side tests for the chain logic
 ```
+
+The song is written as text in `source/sound.c` (`lead_src`, `bass_src`,
+`drum_src`), so it is easy to edit.
 
 No libraries are needed beyond devkitARM. After editing the artwork or track in
 `tools/gen_assets.py`, run `make assets`. Run the logic tests with `make test`.

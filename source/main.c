@@ -1,6 +1,7 @@
 #include "gba.h"
 #include "assets.h"
 #include "chain.h"
+#include "sound.h"
 
 #define TEXT_SBB 30
 #define MAP_SBB 31
@@ -150,6 +151,7 @@ static void start_level(void)
     text_clear();
     draw_hud();
     state = ST_PLAY;
+    music_play();
 }
 
 static int32_t level_speed(void)
@@ -186,7 +188,9 @@ static void update_shot(void)
         }
         int hit = chain_hit(&chain, x, y);
         if (hit >= 0) {
-            score += chain_insert(&chain, hit, x, y, shot_color);
+            int pts = chain_insert(&chain, hit, x, y, shot_color);
+            if (pts) sfx_match(chain.combo);
+            score += pts;
             shot_active = 0;
             // make sure the frog isn't holding a color that is gone
             unsigned m = chain_colors(&chain);
@@ -204,8 +208,12 @@ static void update_play(void)
     angle &= 0xFFFF;
 
     uint16_t pressed = keys & ~prev_keys;
-    if ((pressed & KEY_A) && !shot_active) fire();
+    if ((pressed & KEY_A) && !shot_active) {
+        fire();
+        sfx_shoot();
+    }
     if (pressed & KEY_B) {
+        sfx_swap();
         int t = cur_color;
         cur_color = next_color;
         next_color = t;
@@ -213,14 +221,18 @@ static void update_play(void)
 
     update_shot();
 
+    int before = score;
     ChainState cs = chain_update(&chain, level_speed(), &score);
+    if (score != before) sfx_match(chain.combo);
     draw_hud();
     if (cs == CHAIN_LOST) {
         state = ST_OVER;
+        sfx_over();
         text_center(9, "GAME OVER");
         text_center(11, "PRESS START");
     } else if (cs == CHAIN_CLEARED) {
         state = ST_CLEAR;
+        sfx_clear();
         timer = 120;
         text_center(9, "LEVEL CLEAR!");
     }
@@ -264,6 +276,8 @@ static void draw_objects(void)
 int main(void)
 {
     init_video();
+    sound_init();
+    music_play();
     state = ST_TITLE;
     text_center(6, "ZUMA GBA");
     text_center(12, "PRESS START");
@@ -304,5 +318,6 @@ int main(void)
         draw_objects();
         vsync();
         for (int i = 0; i < 128 * 4; i++) OAM[i] = oam[i];
+        sound_update();
     }
 }
