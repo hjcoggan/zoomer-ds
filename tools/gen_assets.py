@@ -309,23 +309,18 @@ def serpent_head(cv):
         cv.put(x, 70 - (x - 231) // 4, JADE_DK)
 
 
-def skull(cv, hx, hy):
-    """Skull whose mouth is the hole at the end of the track."""
-    def bone(x, y, d):
-        n = 0.85 + 0.2 * (1 - (y - (hy - 14)) / 14)
-        return scale(BONE, n)
-    disc(cv, hx, hy - 7, 8.5, bone)
-    fill_poly(cv, [(hx - 6, hy - 2), (hx + 6, hy - 2), (hx + 5, hy + 4), (hx - 5, hy + 4)],
-              lambda x, y: scale(BONE, 0.8))
-    for ex in (hx - 3.5, hx + 3.5):
-        disc(cv, ex, hy - 7, 2.4, (16, 6, 6))
-        cv.put(int(ex), int(hy - 8), (160, 30, 30))
-    cv.put(hx, hy - 3, (40, 20, 16))
-    # hole (mouth) with gold rim
-    disc(cv, hx, hy + 1, 7.5, lambda x, y, d: GOLD_DK if d > 6.2 else (GOLD if d > 5.4 else (6, 4, 4)))
-    for tx in (-3, -1, 1, 3):
-        cv.put(hx + tx, hy - 4, BONE)
-        cv.put(hx + tx, hy - 3, scale(BONE, 0.8))
+def end_hole(cv, hx, hy):
+    """Gold-rimmed pit at the end of the track."""
+    def col(x, y, d):
+        nx, ny = (x + 0.5 - hx) / max(d, 0.1), (y + 0.5 - hy) / max(d, 0.1)
+        lit = nx * LIGHT[0] + ny * LIGHT[1]
+        if d > 6.8:
+            return GOLD_DK
+        if d > 5.2:
+            return scale(GOLD, 1.0 + 0.35 * lit)
+        # inside the pit: dark, lit a little on the far wall
+        return scale((40, 24, 16), max(0.15, 0.6 - 0.5 * lit) * (d / 5.2))
+    disc(cv, hx, hy, 7.5, col)
 
 
 def draw_track(cv, groove, lip):
@@ -440,7 +435,7 @@ def render_theme(t):
     corner_medallion(cv, 226, 24, t["stone"])
     draw_track(cv, t["groove"], t["lip"])
     sun_stone(cv, CX, CY, 20, t["stone"])
-    skull(cv, END[0], END[1])
+    end_hole(cv, END[0], END[1])
     serpent_head(cv)
     if t["glow"]:
         glows = [(16, 128), (224, 128), (14, 22), (226, 24), (120, 84)]

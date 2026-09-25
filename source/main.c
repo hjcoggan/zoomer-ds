@@ -7,7 +7,8 @@
 #define TEXT_SBB 30
 #define MAP_SBB 31
 #define SHOT_SPEED 5
-#define TURN_SPEED 384            // 8.8 fixed, 256 units per full turn
+#define TURN_SPEED 256            // d-pad: fine aim, 8.8 fixed, 256 units per turn
+#define FAST_TURN_SPEED 1024      // L/R shoulders: quick spin
 #define ROLL_IN_SPEED (3 << 7)    // fast roll-in at level start
 #define PAUSE_DIM 9               // 0-16 brightness decrease while paused
 
@@ -270,9 +271,10 @@ static void start_level(void)
     int theme = (level - 1) % NUM_THEMES;
     load_bg(theme_pal[theme], theme_tiles[theme]);
 
-    int total = 30 + level * 10;
-    if (total > 100) total = 100;
-    int ncolors = level < 3 ? 4 : 5;
+    // gentle ramp: more balls and colors every level or two
+    int total = 25 + level * 5;
+    if (total > 90) total = 90;
+    int ncolors = level < 3 ? 3 : level < 6 ? 4 : 5;
     chain_init(&chain, total, ncolors, rand_next(&rng));
     cur_color = rand_next(&rng) % ncolors;
     next_color = rand_next(&rng) % ncolors;
@@ -363,7 +365,8 @@ static int32_t level_speed(void)
     // roll in quickly until the head is a quarter of the way along
     if (chain.count > 0 && chain.pos[chain.count - 1] < (PATH_LEN / 4) << 8 && chain.to_spawn > 0)
         return ROLL_IN_SPEED;
-    return 40 + level * 6;
+    int speed = 24 + level * 3;           // 8.8 px/frame
+    return speed > 64 ? 64 : speed;
 }
 
 static void fire(void)
@@ -426,6 +429,8 @@ static void update_play(uint16_t pressed)
     }
     if (keys & KEY_LEFT) angle -= TURN_SPEED;
     if (keys & KEY_RIGHT) angle += TURN_SPEED;
+    if (keys & KEY_L) angle -= FAST_TURN_SPEED;
+    if (keys & KEY_R) angle += FAST_TURN_SPEED;
     angle &= 0xFFFF;
 
     if ((pressed & KEY_A) && !shot_active) {

@@ -52,7 +52,8 @@ open -a mGBA zuma-gba.gba
 
 | Button | Action |
 | --- | --- |
-| Left / Right | Aim the frog |
+| Left / Right | Aim the frog (fine) |
+| L / R | Spin the frog quickly |
 | A | Shoot |
 | B | Swap current and next ball |
 | Start | Start game / pause menu (Up/Down + A to choose) |
