@@ -48,11 +48,25 @@ make
 open -a mGBA zuma-gba.gba
 ```
 
+## Controls
+
+| Button | Action |
+| --- | --- |
+| Left / Right | Aim the frog |
+| A | Shoot |
+| B | Swap current and next ball |
+| Start | Start / restart |
+
 ## Project layout
 
 ```
-source/     C source files
-include/    Headers
-graphics/   Sprites and backgrounds (converted by grit)
-Makefile    devkitPro GBA build
+source/main.c     Game loop, input, rendering (sprites + tile backgrounds)
+source/chain.c    Ball chain logic: spawning, pushing, matching, roll-back combos
+source/assets.c   Generated: track path, sine table, palettes, tiles, font
+include/          Headers (gba.h has the hardware registers)
+tools/gen_assets.py  Generates assets.c/assets.h and build/preview.png
+tests/            Host-side tests for the chain logic
 ```
+
+No libraries are needed beyond devkitARM. After editing the artwork or track in
+`tools/gen_assets.py`, run `make assets`. Run the logic tests with `make test`.
