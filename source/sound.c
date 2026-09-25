@@ -216,6 +216,12 @@ void music_stop(void)
     SND4_FREQ = RESTART;
 }
 
+void music_resume(void)
+{
+    music_on = 1;
+    step_timer = 0;
+}
+
 void sound_update(void)
 {
     if (music_on && --step_timer <= 0) {

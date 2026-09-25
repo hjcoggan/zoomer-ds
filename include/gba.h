@@ -9,6 +9,8 @@
 #define REG_BG0CNT   (*(volatile uint16_t *)0x04000008)
 #define REG_BG1CNT   (*(volatile uint16_t *)0x0400000A)
 #define REG_KEYINPUT (*(volatile uint16_t *)0x04000130)
+#define REG_BLDCNT   (*(volatile uint16_t *)0x04000050)
+#define REG_BLDY     (*(volatile uint16_t *)0x04000054)
 
 #define DCNT_MODE0  0x0000
 #define DCNT_OBJ_1D 0x0040
@@ -19,6 +21,14 @@
 #define BG_PRIO(n)  (n)
 #define BG_CBB(n)   ((n) << 2)
 #define BG_SBB(n)   ((n) << 8)
+#define BG_8BPP     0x0080
+
+// brightness fade: targets BG0-3, OBJ, backdrop
+#define BLD_BG0     0x01
+#define BLD_BG1     0x02
+#define BLD_OBJ     0x10
+#define BLD_BD      0x20
+#define BLD_DARKEN  0x00C0
 
 #define PAL_BG   ((volatile uint16_t *)0x05000000)
 #define PAL_OBJ  ((volatile uint16_t *)0x05000200)

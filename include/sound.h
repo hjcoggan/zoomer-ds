@@ -10,7 +10,8 @@ void sound_init(void);
 void sound_update(void);     // call once per frame
 
 void music_play(void);       // restart the song from the top
-void music_stop(void);
+void music_stop(void);       // silence, keeping the song position
+void music_resume(void);
 
 void sfx_shoot(void);
 void sfx_swap(void);

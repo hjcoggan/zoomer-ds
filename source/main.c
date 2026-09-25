@@ -3,11 +3,13 @@
 #include "chain.h"
 #include "sound.h"
 
+#define FONT_CBB 3
 #define TEXT_SBB 30
 #define MAP_SBB 31
 #define SHOT_SPEED 5
 #define TURN_SPEED 384            // 8.8 fixed, 256 units per full turn
 #define ROLL_IN_SPEED (3 << 7)    // fast roll-in at level start
+#define PAUSE_DIM 9               // 0-16 brightness decrease while paused
 
 // OAM slots
 #define OBJ_MOUTH 0
@@ -16,12 +18,19 @@
 #define OBJ_SHOT  3
 #define OBJ_CHAIN 4
 
-typedef enum { ST_TITLE, ST_PLAY, ST_CLEAR, ST_OVER } State;
+// text styles, matching FONT_STYLES in tools/gen_assets.py
+#define TXT_PLAIN 0
+#define TXT_PANEL 1
+#define TXT_HILITE 2
+
+typedef enum { ST_TITLE, ST_PLAY, ST_PAUSE, ST_CLEAR, ST_OVER } State;
+enum { MENU_RESUME, MENU_RESTART, MENU_QUIT, MENU_COUNT };
 
 static uint16_t oam[128 * 4];
 static Chain chain;
 static State state;
-static int level, score, timer;
+static int level, score, level_score, best, timer, frames;
+static int menu_sel;
 static int32_t angle;             // 8.8, 0 = up, clockwise
 static int cur_color, next_color;
 static int shot_active, shot_color;
@@ -40,7 +49,7 @@ static void text_clear(void)
     for (int i = 0; i < 32 * 32; i++) map[i] = 0;
 }
 
-static void text_at(int x, int y, const char *s)
+static void text_style(int x, int y, const char *s, int style)
 {
     volatile uint16_t *map = SCREENBLOCK(TEXT_SBB);
     for (; *s; s++, x++) {
@@ -51,26 +60,57 @@ static void text_at(int x, int y, const char *s)
                 break;
             }
         }
-        map[y * 32 + x] = t | (1 << 12);
+        map[y * 32 + x] = (style * FONT_NCHARS + t) | (1 << 12);
     }
 }
 
-static void text_center(int y, const char *s)
+static int text_len(const char *s)
 {
     int n = 0;
     while (s[n]) n++;
-    text_at((30 - n) / 2, y, s);
+    return n;
 }
 
-static void num_at(int x, int y, int v, int width)
+static void text_at(int x, int y, const char *s) { text_style(x, y, s, TXT_PLAIN); }
+
+static void text_center(int y, const char *s, int style)
 {
-    char buf[12];
+    text_style((30 - text_len(s)) / 2, y, s, style);
+}
+
+static void format_num(char *buf, int v, int width)
+{
     buf[width] = 0;
     for (int i = width - 1; i >= 0; i--) {
         buf[i] = '0' + v % 10;
         v /= 10;
     }
+}
+
+static void num_at(int x, int y, int v, int width)
+{
+    char buf[12];
+    format_num(buf, v, width);
     text_at(x, y, buf);
+}
+
+// Gold-framed panel on the text layer, centered horizontally.
+static void panel(int y, int w, int h)
+{
+    volatile uint16_t *map = SCREENBLOCK(TEXT_SBB);
+    int x = (30 - w) / 2;
+    int fill = TXT_PANEL * FONT_NCHARS;   // blank char on a panel
+    for (int j = 0; j < h; j++) {
+        for (int i = 0; i < w; i++) {
+            int t = fill;
+            int top = j == 0, bot = j == h - 1, left = i == 0, right = i == w - 1;
+            if (top) t = FRAME_TILE + (left ? 0 : right ? 2 : 1);
+            else if (bot) t = FRAME_TILE + (left ? 5 : right ? 7 : 6);
+            else if (left) t = FRAME_TILE + 3;
+            else if (right) t = FRAME_TILE + 4;
+            map[(y + j) * 32 + x + i] = t | (1 << 12);
+        }
+    }
 }
 
 static void draw_hud(void)
@@ -81,17 +121,26 @@ static void draw_hud(void)
     num_at(27, 0, level, 2);
 }
 
-// ---------------------------------------------------------------- setup
+// ---------------------------------------------------------------- video
+
+static void load_bg(const uint16_t *pal, const uint32_t *tiles)
+{
+    PAL_BG[0] = pal[0];
+    for (int i = BG_FIRST_COLOR; i < 256; i++) PAL_BG[i] = pal[i];
+    volatile uint32_t *d = CHARBLOCK(0);
+    for (int i = 0; i < BG_IMG_WORDS; i++) d[i] = tiles[i];
+}
 
 static void init_video(void)
 {
-    REG_DISPCNT = 0;
-    for (int i = 0; i < 32; i++) PAL_BG[i] = bg_pal[i];
+    REG_DISPCNT = 0x0080;         // forced blank while loading
+    REG_BLDCNT = BLD_DARKEN | BLD_BG0 | BLD_BG1 | BLD_OBJ | BLD_BD;
+    REG_BLDY = 16;                // start black, screens fade in
+
+    for (int i = 0; i < 16; i++) PAL_BG[16 + i] = font_pal[i];
     for (int i = 0; i < (int)(sizeof(obj_pal) / 2); i++) PAL_OBJ[i] = obj_pal[i];
 
-    volatile uint32_t *d = CHARBLOCK(0);
-    for (int i = 0; i < (int)(sizeof(bg_tiles) / 4); i++) d[i] = bg_tiles[i];
-    d = CHARBLOCK(2);
+    volatile uint32_t *d = CHARBLOCK(FONT_CBB);
     for (int i = 0; i < (int)(sizeof(font_tiles) / 4); i++) d[i] = font_tiles[i];
     for (int i = 0; i < (int)(sizeof(obj_tiles) / 4); i++) OBJ_TILES[i] = obj_tiles[i];
 
@@ -101,8 +150,8 @@ static void init_video(void)
             map[y * 32 + x] = (x < 30 && y < 20) ? y * 30 + x : 0;
     text_clear();
 
-    REG_BG0CNT = BG_PRIO(3) | BG_CBB(0) | BG_SBB(MAP_SBB);
-    REG_BG1CNT = BG_PRIO(0) | BG_CBB(2) | BG_SBB(TEXT_SBB);
+    REG_BG0CNT = BG_PRIO(3) | BG_CBB(0) | BG_SBB(MAP_SBB) | BG_8BPP;
+    REG_BG1CNT = BG_PRIO(0) | BG_CBB(FONT_CBB) | BG_SBB(TEXT_SBB);
 
     for (int i = 0; i < 128; i++) oam[i * 4] = ATTR0_HIDE;
     REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_OBJ | DCNT_OBJ_1D;
@@ -126,7 +175,83 @@ static void ball_obj(int n, int x, int y, int color)
     set_obj(n, x - 4, y - 4, 0, ATTR1_SIZE8, 0 | ATTR2_PRIO(1) | ATTR2_PAL(color));
 }
 
-// ---------------------------------------------------------------- game
+static void draw_objects(void)
+{
+    int a = angle >> 8;
+    int s = isin(a) >> 4, c = icos(a) >> 4;   // 8.8
+    int fx = state == ST_TITLE ? TITLE_FROG_X : FROG_X;
+    int fy = state == ST_TITLE ? TITLE_FROG_Y : FROG_Y;
+
+    // frog, affine sprite 0
+    set_obj(OBJ_FROG, fx - 16, fy - 16, ATTR0_AFFINE, ATTR1_SIZE32 | (0 << 9),
+            FROG_TILE | ATTR2_PRIO(1) | ATTR2_PAL(FROG_PALBANK));
+    oam[0 * 4 + 3] = c;
+    oam[1 * 4 + 3] = s;
+    oam[2 * 4 + 3] = -s;
+    oam[3 * 4 + 3] = c;
+
+    if (state != ST_TITLE && state != ST_OVER) {
+        ball_obj(OBJ_MOUTH, fx + (s * 10 >> 8), fy - (c * 10 >> 8), cur_color);
+        ball_obj(OBJ_NEXT, fx - (s * 9 >> 8), fy + (c * 9 >> 8), next_color);
+    } else {
+        hide_obj(OBJ_MOUTH);
+        hide_obj(OBJ_NEXT);
+    }
+
+    if (shot_active)
+        ball_obj(OBJ_SHOT, shot_x >> 8, shot_y >> 8, shot_color);
+    else
+        hide_obj(OBJ_SHOT);
+
+    int n = OBJ_CHAIN;
+    for (int i = chain.count - 1; i >= 0 && n < 128; i--) {
+        int x, y;
+        chain_point(chain.pos[i], &x, &y);
+        if (x > 236) continue;    // still inside the serpent's mouth
+        ball_obj(n++, x, y, chain.color[i]);
+    }
+    for (; n < 128; n++) hide_obj(n);
+}
+
+static void frame(void)
+{
+    draw_objects();
+    vsync();
+    for (int i = 0; i < 128 * 4; i++) OAM[i] = oam[i];
+    sound_update();
+    frames++;
+}
+
+static void fade(int to_black)
+{
+    REG_BLDCNT = BLD_DARKEN | BLD_BG0 | BLD_BG1 | BLD_OBJ | BLD_BD;
+    for (int i = 0; i <= 16; i += 2) {
+        REG_BLDY = to_black ? i : 16 - i;
+        frame();
+    }
+    if (!to_black) REG_BLDCNT = 0;
+}
+
+// ---------------------------------------------------------------- screens
+
+static void go_title(void)
+{
+    fade(1);
+    music_stop();
+    load_bg(title_pal, title_tiles);
+    chain.count = 0;
+    shot_active = 0;
+    angle = 0;
+    text_clear();
+    if (best > 0) {
+        char buf[16] = "BEST ";
+        format_num(buf + 5, best, 6);
+        text_center(17, buf, TXT_PLAIN);
+    }
+    state = ST_TITLE;
+    fade(0);
+    music_play();
+}
 
 static int pick_color(void)
 {
@@ -140,6 +265,11 @@ static int pick_color(void)
 
 static void start_level(void)
 {
+    fade(1);
+    music_stop();
+    int theme = (level - 1) % NUM_THEMES;
+    load_bg(theme_pal[theme], theme_tiles[theme]);
+
     int total = 30 + level * 10;
     if (total > 100) total = 100;
     int ncolors = level < 3 ? 4 : 5;
@@ -148,11 +278,85 @@ static void start_level(void)
     next_color = rand_next(&rng) % ncolors;
     shot_active = 0;
     angle = 0;
+    level_score = score;
     text_clear();
     draw_hud();
     state = ST_PLAY;
+    fade(0);
     music_play();
 }
+
+static void new_game(void)
+{
+    level = 1;
+    score = 0;
+    start_level();
+}
+
+static void draw_pause_menu(void)
+{
+    static const char *const items[MENU_COUNT] = { "RESUME", "RESTART", "QUIT" };
+    panel(6, 12, 8);
+    text_center(7, "PAUSED", TXT_HILITE);
+    for (int i = 0; i < MENU_COUNT; i++) {
+        int sel = i == menu_sel;
+        text_style(10, 9 + i, sel ? ">" : " ", sel ? TXT_HILITE : TXT_PANEL);
+        text_style(11, 9 + i, items[i], sel ? TXT_HILITE : TXT_PANEL);
+    }
+}
+
+static void pause_game(void)
+{
+    state = ST_PAUSE;
+    menu_sel = MENU_RESUME;
+    music_stop();
+    REG_BLDCNT = BLD_DARKEN | BLD_BG0 | BLD_OBJ;
+    REG_BLDY = PAUSE_DIM;
+    draw_pause_menu();
+}
+
+static void resume_game(void)
+{
+    REG_BLDCNT = 0;
+    text_clear();
+    draw_hud();
+    state = ST_PLAY;
+    music_resume();
+}
+
+static void update_pause(uint16_t pressed)
+{
+    if (pressed & KEY_UP) {
+        menu_sel = (menu_sel + MENU_COUNT - 1) % MENU_COUNT;
+        sfx_swap();
+        draw_pause_menu();
+    }
+    if (pressed & KEY_DOWN) {
+        menu_sel = (menu_sel + 1) % MENU_COUNT;
+        sfx_swap();
+        draw_pause_menu();
+    }
+    if (pressed & KEY_B) {
+        resume_game();
+        return;
+    }
+    if (pressed & (KEY_A | KEY_START)) {
+        switch (menu_sel) {
+        case MENU_RESUME:
+            resume_game();
+            break;
+        case MENU_RESTART:
+            score = level_score;
+            start_level();
+            break;
+        case MENU_QUIT:
+            go_title();
+            break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- play
 
 static int32_t level_speed(void)
 {
@@ -201,13 +405,29 @@ static void update_shot(void)
     }
 }
 
-static void update_play(void)
+static void game_over(void)
 {
+    char buf[16] = "SCORE ";
+    state = ST_OVER;
+    sfx_over();
+    if (score > best) best = score;
+    format_num(buf + 6, score, 6);
+    panel(6, 16, 8);
+    text_center(7, "GAME OVER", TXT_HILITE);
+    text_center(9, buf, TXT_PANEL);
+    text_center(11, "PRESS START", TXT_PANEL);
+}
+
+static void update_play(uint16_t pressed)
+{
+    if (pressed & KEY_START) {
+        pause_game();
+        return;
+    }
     if (keys & KEY_LEFT) angle -= TURN_SPEED;
     if (keys & KEY_RIGHT) angle += TURN_SPEED;
     angle &= 0xFFFF;
 
-    uint16_t pressed = keys & ~prev_keys;
     if ((pressed & KEY_A) && !shot_active) {
         fire();
         sfx_shoot();
@@ -226,62 +446,30 @@ static void update_play(void)
     if (score != before) sfx_match(chain.combo);
     draw_hud();
     if (cs == CHAIN_LOST) {
-        state = ST_OVER;
-        sfx_over();
-        text_center(9, "GAME OVER");
-        text_center(11, "PRESS START");
+        game_over();
     } else if (cs == CHAIN_CLEARED) {
         state = ST_CLEAR;
         sfx_clear();
-        timer = 120;
-        text_center(9, "LEVEL CLEAR!");
+        timer = 150;
+        panel(8, 16, 3);
+        text_center(9, "LEVEL CLEAR!", TXT_HILITE);
     }
 }
 
-static void draw_objects(void)
+static void update_title(uint16_t pressed)
 {
-    int a = angle >> 8;
-    int s = isin(a) >> 4, c = icos(a) >> 4;   // 8.8
-
-    // frog, affine sprite 0
-    set_obj(OBJ_FROG, FROG_X - 16, FROG_Y - 16, ATTR0_AFFINE, ATTR1_SIZE32 | (0 << 9),
-            FROG_TILE | ATTR2_PRIO(1) | ATTR2_PAL(FROG_PALBANK));
-    oam[0 * 4 + 3] = c;
-    oam[1 * 4 + 3] = s;
-    oam[2 * 4 + 3] = -s;
-    oam[3 * 4 + 3] = c;
-
-    if (state == ST_PLAY || state == ST_CLEAR) {
-        ball_obj(OBJ_MOUTH, FROG_X + (s * 10 >> 8), FROG_Y - (c * 10 >> 8), cur_color);
-        ball_obj(OBJ_NEXT, FROG_X - (s * 9 >> 8), FROG_Y + (c * 9 >> 8), next_color);
-    } else {
-        hide_obj(OBJ_MOUTH);
-        hide_obj(OBJ_NEXT);
-    }
-
-    if (shot_active)
-        ball_obj(OBJ_SHOT, shot_x >> 8, shot_y >> 8, shot_color);
-    else
-        hide_obj(OBJ_SHOT);
-
-    int n = OBJ_CHAIN;
-    for (int i = chain.count - 1; i >= 0 && n < 128; i--, n++) {
-        int x, y;
-        chain_point(chain.pos[i], &x, &y);
-        ball_obj(n, x, y, chain.color[i]);
-    }
-    for (; n < 128; n++) hide_obj(n);
+    // frog looks around, "PRESS START" blinks
+    angle = ((isin(frames) * 20) >> 12) << 8;
+    angle &= 0xFFFF;
+    text_center(15, (frames & 32) ? "           " : "PRESS START", TXT_PLAIN);
+    if (pressed & KEY_START) new_game();
 }
 
 int main(void)
 {
     init_video();
     sound_init();
-    music_play();
-    state = ST_TITLE;
-    text_center(6, "ZUMA GBA");
-    text_center(12, "PRESS START");
-    chain.count = 0;
+    go_title();
 
     for (;;) {
         prev_keys = keys;
@@ -291,14 +479,13 @@ int main(void)
 
         switch (state) {
         case ST_TITLE:
-            if (pressed & KEY_START) {
-                level = 1;
-                score = 0;
-                start_level();
-            }
+            update_title(pressed);
             break;
         case ST_PLAY:
-            update_play();
+            update_play(pressed);
+            break;
+        case ST_PAUSE:
+            update_pause(pressed);
             break;
         case ST_CLEAR:
             if (--timer <= 0) {
@@ -307,17 +494,10 @@ int main(void)
             }
             break;
         case ST_OVER:
-            if (pressed & KEY_START) {
-                level = 1;
-                score = 0;
-                start_level();
-            }
+            if (pressed & KEY_START) go_title();
             break;
         }
 
-        draw_objects();
-        vsync();
-        for (int i = 0; i < 128 * 4; i++) OAM[i] = oam[i];
-        sound_update();
+        frame();
     }
 }

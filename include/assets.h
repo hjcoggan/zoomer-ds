@@ -4,21 +4,31 @@
 
 #include <stdint.h>
 
-#define PATH_LEN 727
+#define PATH_LEN 711
 #define FROG_X 120
 #define FROG_Y 84
+#define TITLE_FROG_X 120
+#define TITLE_FROG_Y 100
 #define FROG_TILE 4
 #define NUM_COLORS 5
 #define FROG_PALBANK 5
-#define FONT_CHARS " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ:!-"
+#define FONT_CHARS " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ:!->"
+#define FONT_NCHARS 41
+#define FRAME_TILE 123
+#define NUM_THEMES 3
+#define BG_FIRST_COLOR 32
+#define BG_IMG_WORDS 9600
 
 extern const int16_t path_x[PATH_LEN];
 extern const int16_t path_y[PATH_LEN];
 extern const int16_t sin_tab[256];
-extern const uint16_t bg_pal[32];
+extern const uint16_t font_pal[16];
 extern const uint16_t obj_pal[96];
-extern const uint32_t bg_tiles[4800];
+extern const uint16_t title_pal[256];
+extern const uint32_t title_tiles[BG_IMG_WORDS];
+extern const uint16_t theme_pal[NUM_THEMES][256];
+extern const uint32_t theme_tiles[NUM_THEMES][BG_IMG_WORDS];
 extern const uint32_t obj_tiles[160];
-extern const uint32_t font_tiles[320];
+extern const uint32_t font_tiles[1048];
 
 #endif

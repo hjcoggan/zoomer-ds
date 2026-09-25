@@ -55,7 +55,7 @@ open -a mGBA zuma-gba.gba
 | Left / Right | Aim the frog |
 | A | Shoot |
 | B | Swap current and next ball |
-| Start | Start / restart |
+| Start | Start game / pause menu (Up/Down + A to choose) |
 
 ## Project layout
 
@@ -65,7 +65,8 @@ source/chain.c    Ball chain logic: spawning, pushing, matching, roll-back combo
 source/sound.c    Music and sound effects on the GBA's PSG channels
 source/assets.c   Generated: track path, sine table, palettes, tiles, font
 include/          Headers (gba.h has the hardware registers)
-tools/gen_assets.py  Generates assets.c/assets.h and build/preview.png
+tools/gen_assets.py  Draws all artwork (title, 3 level themes, sprites, font) and
+                     writes assets.c/assets.h plus build/preview_*.png
 tests/            Host-side tests for the chain logic
 ```
 
