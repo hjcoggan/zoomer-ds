@@ -3,6 +3,7 @@
 #define CHAIN_H
 
 #include <stdint.h>
+#include "assets.h"
 
 #define MAX_BALLS 128
 #define BALL_D (8 << 8)          // ball spacing along the path, 8.8 fixed
@@ -22,6 +23,11 @@ typedef struct {
 
 uint32_t rand_next(uint32_t *state);
 
+// Track the chain runs along; set before chain_init.
+void chain_set_layout(const Layout *l);
+const Layout *chain_layout(void);
+
+// total < 0 spawns balls forever (endless mode)
 void chain_init(Chain *c, int total, int ncolors, uint32_t seed);
 
 // Advance one frame with the tail pushed at `speed` (8.8 px/frame).

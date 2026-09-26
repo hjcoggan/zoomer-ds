@@ -1,5 +1,9 @@
 #include "chain.h"
-#include "assets.h"
+
+static const Layout *layout = &layouts[0];
+
+void chain_set_layout(const Layout *l) { layout = l; }
+const Layout *chain_layout(void) { return layout; }
 
 uint32_t rand_next(uint32_t *s)
 {
@@ -14,9 +18,9 @@ void chain_point(int32_t pos, int *x, int *y)
 {
     int i = pos >> 8;
     if (i < 0) i = 0;
-    if (i >= PATH_LEN) i = PATH_LEN - 1;
-    *x = path_x[i];
-    *y = path_y[i];
+    if (i >= layout->len) i = layout->len - 1;
+    *x = layout->x[i];
+    *y = layout->y[i];
 }
 
 void chain_init(Chain *c, int total, int ncolors, uint32_t seed)
@@ -79,7 +83,7 @@ static int match_at(Chain *c, int k)
 
 static void spawn(Chain *c)
 {
-    if (c->to_spawn <= 0 || c->count >= MAX_BALLS - 1) return;
+    if (c->to_spawn == 0 || c->count >= MAX_BALLS - 1) return;
     if (c->count > 0 && c->pos[0] < BALL_D) return;
     int col;
     if (c->count > 0 && (rand_next(&c->rng) % 3) == 0)
@@ -87,7 +91,7 @@ static void spawn(Chain *c)
     else
         col = rand_next(&c->rng) % c->ncolors;
     insert_at(c, 0, c->count > 0 ? c->pos[0] - BALL_D : 0, col);
-    c->to_spawn--;
+    if (c->to_spawn > 0) c->to_spawn--;
 }
 
 ChainState chain_update(Chain *c, int32_t speed, int *score)
@@ -120,7 +124,7 @@ ChainState chain_update(Chain *c, int32_t speed, int *score)
         break;
     }
 
-    if (c->count > 0 && (c->pos[c->count - 1] >> 8) >= PATH_LEN - 1)
+    if (c->count > 0 && (c->pos[c->count - 1] >> 8) >= layout->len - 1)
         return CHAIN_LOST;
     if (c->count == 0 && c->to_spawn == 0)
         return CHAIN_CLEARED;

@@ -76,10 +76,36 @@ static void test_lose(void)
 {
     Chain c;
     int score = 0;
-    set_chain(&c, "0", (PATH_LEN - 2) << 8);
+    set_chain(&c, "0", (chain_layout()->len - 2) << 8);
     ChainState s = CHAIN_OK;
     for (int f = 0; f < 10 && s == CHAIN_OK; f++) s = chain_update(&c, 256, &score);
     CHECK(s == CHAIN_LOST);
+}
+
+static void test_endless_keeps_spawning(void)
+{
+    Chain c;
+    int score = 0;
+    chain_init(&c, -1, 4, 7);
+    for (int f = 0; f < 600; f++) chain_update(&c, 256, &score);
+    CHECK(c.count > 40);
+    CHECK(c.to_spawn < 0);
+}
+
+static void test_every_layout(void)
+{
+    for (int l = 0; l < NUM_LAYOUTS; l++) {
+        Chain c;
+        int score = 0;
+        chain_set_layout(&layouts[l]);
+        chain_init(&c, 30, 3, 99);
+        ChainState s = CHAIN_OK;
+        int f;
+        for (f = 0; f < 20000 && s == CHAIN_OK; f++) s = chain_update(&c, 128, &score);
+        CHECK(s == CHAIN_LOST);           // an unattended chain reaches the hole
+        CHECK(f > layouts[l].len / 2);
+    }
+    chain_set_layout(&layouts[0]);
 }
 
 int main(void)
@@ -89,6 +115,8 @@ int main(void)
     test_no_match_inserts();
     test_retract_combo();
     test_lose();
+    test_endless_keeps_spawning();
+    test_every_layout();
     if (failures) {
         printf("%d failure(s)\n", failures);
         return 1;

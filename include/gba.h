@@ -8,6 +8,7 @@
 #define REG_VCOUNT   (*(volatile uint16_t *)0x04000006)
 #define REG_BG0CNT   (*(volatile uint16_t *)0x04000008)
 #define REG_BG1CNT   (*(volatile uint16_t *)0x0400000A)
+#define REG_BG1VOFS  (*(volatile uint16_t *)0x04000016)
 #define REG_KEYINPUT (*(volatile uint16_t *)0x04000130)
 #define REG_BLDCNT   (*(volatile uint16_t *)0x04000050)
 #define REG_BLDY     (*(volatile uint16_t *)0x04000054)

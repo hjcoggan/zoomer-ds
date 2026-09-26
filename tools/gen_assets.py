@@ -12,7 +12,6 @@ import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 W, H = 240, 160
-CX, CY = 120, 84           # frog position in game
 TITLE_FROG = (120, 100)    # frog position on the title screen
 BG_FIRST_COLOR = 32        # palette 0-31 is shared with the text layer
 BG_MAX_COLORS = 256 - BG_FIRST_COLOR
@@ -61,26 +60,18 @@ def fbm(x, y, seed, octaves=3):
     return v / tot
 
 
-# ---------------------------------------------------------------- path
-def build_path():
-    theta_end = 3.5 * math.pi
-    dense = [(256.0, CY)]
-    x = 256.0
-    while x > CX + 100.0:
-        x -= 0.25
-        dense.append((x, CY))
-    steps = 20000
-    for i in range(steps + 1):
-        t = theta_end * i / steps
-        f = t / theta_end
-        rx = 100 - 56 * f
-        ry = 68 - 38 * f
-        dense.append((CX + rx * math.cos(t), CY - ry * math.sin(t)))
+# ---------------------------------------------------------------- track layouts
+HUD_H = 10
+LIGHT = (-0.6, -0.8)   # light from the top left
+
+
+def resample(dense):
+    """Resample a dense polyline at 1px arc length, rounded to pixels."""
     pts = [dense[0]]
     acc = 0.0
     for (x0, y0), (x1, y1) in zip(dense, dense[1:]):
         seg = math.hypot(x1 - x0, y1 - y0)
-        while acc + seg >= 1.0:
+        while seg > 0 and acc + seg >= 1.0:
             u = (1.0 - acc) / seg
             x0, y0 = x0 + (x1 - x0) * u, y0 + (y1 - y0) * u
             seg = math.hypot(x1 - x0, y1 - y0)
@@ -90,24 +81,103 @@ def build_path():
     return [(int(round(x)), int(round(y))) for x, y in pts]
 
 
-PATH = build_path()
-END = PATH[-1]
+def line(a, b):
+    n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) * 4))
+    return [(a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n) for i in range(n + 1)]
 
-# nearest path point for every pixel near the track
-track_d = [[99.0] * W for _ in range(H)]
-track_n = [[(0.0, 0.0)] * W for _ in range(H)]
-for px, py in PATH:
-    for y in range(py - 10, py + 11):
-        if not 0 <= y < H:
-            continue
-        for x in range(px - 10, px + 11):
-            if 0 <= x < W:
-                d = math.hypot(x - px, y - py)
-                if d < track_d[y][x]:
-                    track_d[y][x] = d
-                    track_n[y][x] = ((x - px) / d, (y - py) / d) if d > 0 else (0.0, 0.0)
 
-LIGHT = (-0.6, -0.8)   # light from the top left
+def spiral(cx, cy, rx0, rx1, ry0, ry1, t0, turns, sign, steps=20000):
+    pts = []
+    for i in range(steps + 1):
+        f = i / steps
+        t = t0 + sign * turns * 2 * math.pi * f
+        rx = rx0 + (rx1 - rx0) * f
+        ry = ry0 + (ry1 - ry0) * f
+        pts.append((cx + rx * math.cos(t), cy - ry * math.sin(t)))
+    return pts
+
+
+def rounded(poly, r):
+    """Polyline with each corner rounded by a quadratic curve of radius ~r."""
+    out = [poly[0]]
+    for i in range(1, len(poly) - 1):
+        p0, p1, p2 = poly[i - 1], poly[i], poly[i + 1]
+        l1 = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+        l2 = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+        rr = min(r, l1 / 2, l2 / 2)
+        a = (p1[0] - (p1[0] - p0[0]) / l1 * rr, p1[1] - (p1[1] - p0[1]) / l1 * rr)
+        b = (p1[0] + (p2[0] - p1[0]) / l2 * rr, p1[1] + (p2[1] - p1[1]) / l2 * rr)
+        out += line(out[-1], a)[1:]
+        for k in range(1, 41):
+            t = k / 40
+            out.append(((1 - t) ** 2 * a[0] + 2 * (1 - t) * t * p1[0] + t * t * b[0],
+                        (1 - t) ** 2 * a[1] + 2 * (1 - t) * t * p1[1] + t * t * b[1]))
+    out += line(out[-1], poly[-1])[1:]
+    return out
+
+
+class Layout:
+    def __init__(self, name, dense, frog):
+        self.name = name
+        self.path = resample(dense)
+        self.frog = frog
+        self.end = self.path[-1]
+        first = next(i for i, (x, y) in enumerate(self.path) if 0 <= x < W and HUD_H <= y < H)
+        self.hide = first + 12            # balls stay hidden inside the serpent's mouth
+        x0, y0 = self.path[0]
+        self.edge = "left" if x0 < 0 else "right" if x0 >= W else "top" if y0 < HUD_H else "bottom"
+        fx, fy = self.path[first]
+        self.entry = (fx, fy)
+        self.along = fy if self.edge in ("left", "right") else fx
+        self.d = [[99.0] * W for _ in range(H)]
+        self.n = [[(0.0, 0.0)] * W for _ in range(H)]
+        for px, py in self.path:
+            for y in range(py - 10, py + 11):
+                if not 0 <= y < H:
+                    continue
+                for x in range(px - 10, px + 11):
+                    if 0 <= x < W:
+                        d = math.hypot(x - px, y - py)
+                        if d < self.d[y][x]:
+                            self.d[y][x] = d
+                            self.n[y][x] = ((x - px) / d, (y - py) / d) if d > 0 else (0.0, 0.0)
+        self.validate()
+
+    def validate(self):
+        vis = [(i, x, y) for i, (x, y) in enumerate(self.path) if i >= self.hide - 12]
+        for i, x, y in vis:
+            assert 6 <= x <= 233 or i < self.hide, (self.name, "x out of bounds", x, y)
+            assert HUD_H + 6 <= y <= 153 or i < self.hide, (self.name, "y out of bounds", x, y)
+            d = math.hypot(x - self.frog[0], y - self.frog[1])
+            assert d >= 27, (self.name, "track too close to frog", x, y, d)
+        step = 3
+        for a in range(0, len(vis), step):
+            ia, xa, ya = vis[a]
+            for b in range(a + step, len(vis), step):
+                ib, xb, yb = vis[b]
+                if ib - ia > 30:
+                    d = math.hypot(xa - xb, ya - yb)
+                    assert d >= 15, (self.name, "track overlaps itself", (xa, ya), (xb, yb))
+
+
+LAYOUTS = [
+    # the classic: spiral around a centred frog
+    Layout("spiral", line((256, 84), (220, 84)) + spiral(120, 84, 100, 44, 68, 30, 0, 1.75, 1), (120, 84)),
+    # three rows snaking down towards a frog at the bottom
+    Layout("rows", rounded([(-16, 28), (212, 28), (212, 62), (28, 62), (28, 96), (200, 96)], 16), (120, 136)),
+    # long runway along the bottom into a spiral on the left
+    Layout("side spiral", line((256, 146), (84, 146)) +
+           spiral(84, 88, 70, 32, 58, 30, -math.pi / 2, 1.5, -1), (84, 88)),
+    # a U inside a U, dropping in from the top
+    Layout("horseshoe", rounded([(20, -16), (20, 140), (220, 140), (220, 30), (180, 30),
+                                 (180, 108), (60, 108), (60, 40)], 16), (120, 66)),
+    # columns sweeping right to left towards a frog on the left edge
+    Layout("columns", rounded([(212, -16), (212, 140), (172, 140), (172, 28), (132, 28),
+                               (132, 140), (92, 140), (92, 40)], 18), (38, 84)),
+    # square Aztec-fret spiral
+    Layout("fret", rounded([(-16, 146), (222, 146), (222, 22), (20, 22), (20, 112),
+                            (188, 112), (188, 56), (90, 56)], 16), (126, 84)),
+]
 
 
 # ---------------------------------------------------------------- canvas helpers
@@ -274,8 +344,8 @@ def pyramid(cv, x0, y1, w, steps, stone, flip=False):
             cv.put(x, y, c)
 
 
-def serpent_head(cv):
-    """Quetzalcoatl head the balls pour out of (right edge, facing left)."""
+def _serpent_right(cv):
+    """Quetzalcoatl head on the right edge, mouth centred on y=84."""
     def jade_shade(x, y):
         n = 0.8 + 0.35 * fbm(x * 0.4, y * 0.4, 21, 2)
         return scale(JADE, n)
@@ -309,6 +379,31 @@ def serpent_head(cv):
         cv.put(x, 70 - (x - 231) // 4, JADE_DK)
 
 
+SENTINEL = (1, 2, 3)
+
+
+def serpent_head(cv, L):
+    """Draw the serpent on whichever edge the track enters from."""
+    tmp = Canvas(SENTINEL)
+    _serpent_right(tmp)
+    c = L.along
+    for y in range(56, 112):
+        for x in range(206, 240):
+            col = tmp.px[y][x]
+            if col == SENTINEL:
+                continue
+            u, v = 239 - x, y - 84       # u: distance in from the edge
+            if L.edge == "right":
+                dx, dy = 239 - u, c + v
+            elif L.edge == "left":
+                dx, dy = u, c + v
+            elif L.edge == "top":
+                dx, dy = c + v, HUD_H + u
+            else:
+                dx, dy = c + v, 159 - u
+            cv.put(dx, dy, col)
+
+
 def end_hole(cv, hx, hy):
     """Gold-rimmed pit at the end of the track."""
     def col(x, y, d):
@@ -323,13 +418,13 @@ def end_hole(cv, hx, hy):
     disc(cv, hx, hy, 7.5, col)
 
 
-def draw_track(cv, groove, lip):
+def draw_track(cv, L, groove, lip):
     for y in range(H):
         for x in range(W):
-            d = track_d[y][x]
+            d = L.d[y][x]
             if d > 9.5:
                 continue
-            nx, ny = track_n[y][x]
+            nx, ny = L.n[y][x]
             lit = nx * LIGHT[0] + ny * LIGHT[1]
             n = 0.9 + 0.2 * hash2(x, y, 3)
             if d <= 4.6:
@@ -353,8 +448,133 @@ def hud_bar(cv):
         cv.put(x, 9, (20, 12, 8))
 
 
-def corner_medallion(cv, cx, cy, stone):
-    sun_stone(cv, cx, cy, 9, stone)
+# ---------------------------------------------------------------- scenery
+def totem(cv, x0, y0, stone, glows):
+    """Carved stone idol, 12x26."""
+    for y in range(y0 + 6, y0 + 26):
+        for x in range(x0 + 1, x0 + 11):
+            n = 0.85 + 0.25 * hash2(x // 2, y // 3, 71)
+            c = scale(stone, n * (1.2 if x == x0 + 1 else 0.7 if x == x0 + 10 else 1.0))
+            if (y - y0) % 7 == 0:
+                c = scale(stone, 0.6)
+            cv.put(x, y, c)
+    for x in range(x0, x0 + 12):                # gold headdress
+        for y in range(y0, y0 + 6):
+            if y - y0 >= abs(x - x0 - 5.5) - 2:
+                cv.put(x, y, GOLD if (x + y) % 3 else GOLD_DK)
+    for ex in (x0 + 3, x0 + 7):                  # jade eyes
+        cv.put(ex, y0 + 9, JADE_LT)
+        cv.put(ex + 1, y0 + 9, JADE)
+    for x in range(x0 + 3, x0 + 9):              # mouth
+        cv.put(x, y0 + 14, (30, 16, 12))
+    cv.put(x0 + 4, y0 + 15, BONE)
+    cv.put(x0 + 7, y0 + 15, BONE)
+
+
+def fern(cv, x0, y0, stone, glows):
+    """Jungle plant, 18x16."""
+    cx, cy = x0 + 9, y0 + 15
+    for k in range(7):
+        ang = math.pi * (0.1 + 0.8 * k / 6)
+        for t in range(12):
+            x = cx - math.cos(ang) * t * 0.8
+            y = cy - math.sin(ang) * t * 1.1 + (t * t) * 0.03
+            col = (40, 110, 40) if t % 3 else (100, 180, 70)
+            cv.put(int(x), int(y), col)
+            cv.put(int(x) + 1, int(y), (24, 70, 24))
+
+
+def brazier(cv, x0, y0, stone, glows):
+    """Stone fire bowl, 10x16."""
+    for y in range(y0 + 8, y0 + 16):
+        w = 5 if y < y0 + 11 else 2
+        for x in range(x0 + 5 - w, x0 + 5 + w):
+            cv.put(x, y, scale(stone, 1.1 if y == y0 + 8 else 0.8))
+    disc(cv, x0 + 5, y0 + 5, 3.2, (220, 70, 20))
+    disc(cv, x0 + 5, y0 + 5.5, 2.2, (255, 170, 40))
+    disc(cv, x0 + 5, y0 + 6, 1.1, (255, 240, 150))
+    glows.append((x0 + 5, y0 + 6))
+
+
+def lava_pool(cv, x0, y0, stone, glows):
+    """Bubbling lava, 22x14."""
+    cx, cy = x0 + 11, y0 + 7
+    for y in range(y0, y0 + 14):
+        for x in range(x0, x0 + 22):
+            d = math.hypot((x - cx) / 11, (y - cy) / 7)
+            if d < 0.8:
+                n = fbm(x / 3, y / 3, 81, 2)
+                cv.put(x, y, mix((230, 80, 10), (255, 220, 90), n))
+            elif d < 1.0:
+                cv.put(x, y, (40, 26, 24))
+    glows.append((cx, cy))
+
+
+def pond(cv, x0, y0, stone, glows):
+    """Sacred pool with a jade rim, 24x14."""
+    cx, cy = x0 + 12, y0 + 7
+    for y in range(y0, y0 + 14):
+        for x in range(x0, x0 + 24):
+            d = math.hypot((x - cx) / 12, (y - cy) / 7)
+            if d < 0.78:
+                c = mix((30, 80, 150), (60, 140, 210), 1 - d)
+                if abs(math.sin(d * 14 + x * 0.2)) > 0.93:
+                    c = (160, 210, 240)
+                cv.put(x, y, c)
+            elif d < 1.0:
+                cv.put(x, y, JADE if d < 0.9 else JADE_DK)
+
+
+def medallion(cv, x0, y0, stone, glows):
+    sun_stone(cv, x0 + 10, y0 + 10, 9, stone)
+
+
+def pyramid_decor(cv, x0, y0, stone, glows):
+    pyramid(cv, x0, y0 + 22, 28, 4, stone)
+
+
+DECOR = {  # name: (draw, width, height)
+    "pyramid": (pyramid_decor, 28, 22),
+    "medallion": (medallion, 20, 20),
+    "totem": (totem, 12, 26),
+    "fern": (fern, 18, 16),
+    "brazier": (brazier, 10, 16),
+    "lava": (lava_pool, 22, 14),
+    "pond": (pond, 24, 14),
+}
+
+
+def place_scenery(cv, L, t, seed, glows):
+    """Scatter decorations wherever the track, frog and serpent leave room."""
+    blocked = [[0] * (W + 1) for _ in range(H + 1)]   # summed-area table
+    for y in range(H):
+        row = 0
+        for x in range(W):
+            bad = (L.d[y][x] < 10.5 or y < HUD_H + 2 or
+                   math.hypot(x - L.frog[0], y - L.frog[1]) < 25 or
+                   math.hypot(x - L.entry[0], y - L.entry[1]) < 28)
+            row += bad
+            blocked[y + 1][x + 1] = blocked[y][x + 1] + row
+
+    def free(x, y, w, h):
+        return blocked[y + h][x + w] - blocked[y][x + w] - blocked[y + h][x] + blocked[y][x] == 0
+
+    placed = []
+    kinds = t["decor"]
+    for k, kind in enumerate(kinds):
+        draw, w, h = DECOR[kind]
+        cands = [(hash2(x, y, seed * 31 + k), x, y)
+                 for y in range(HUD_H + 2, H - h + 1, 3) for x in range(1, W - w, 3)]
+        cands.sort()
+        for _, x, y in cands:
+            if not free(x, y, w, h):
+                continue
+            if any(x < px + pw + 4 and px < x + w + 4 and y < py + ph + 4 and py < y + h + 4
+                   for px, py, pw, ph in placed):
+                continue
+            placed.append((x, y, w, h))
+            draw(cv, x, y, t["stone"], glows)
+            break
 
 
 # ---------------------------------------------------------------- level themes
@@ -415,32 +635,64 @@ def floor_night(x, y):
     return c
 
 
+def floor_volcano(x, y):
+    n = 0.8 + 0.4 * fbm(x / 6, y / 6, 61, 2)
+    c = scale((56, 44, 44), n)
+    r = abs(fbm(x / 16, y / 16, 62) - 0.5)
+    if r < 0.018:
+        return mix((255, 210, 80), (230, 70, 10), r / 0.018)       # lava crack
+    if r < 0.05:
+        return mix(c, (170, 50, 20), (0.05 - r) / 0.05 * 0.8)      # glow around it
+    return c
+
+
+def floor_jade(x, y):
+    lx, ly = x % 16, y % 16
+    bx, by = x // 16, y // 16
+    tone = 0.85 + 0.25 * hash2(bx, by, 91)
+    sheen = 0.9 + 0.25 * (1 - (lx + ly) / 30)
+    c = scale((56, 150, 120) if (bx + by) % 2 else (40, 124, 104), tone * sheen)
+    if lx == 0 or ly == 0:
+        return scale(GOLD, 0.8)
+    if lx == 1 or ly == 1:
+        return scale(c, 0.7)
+    if hash2(bx, by, 92) > 0.75 and lx in (5, 10) and 4 <= ly <= 11:
+        return scale(c, 0.75)     # carved grooves
+    return c
+
+
 THEMES = [
     dict(name="jungle", floor=floor_jungle, groove=(112, 78, 44), lip=(160, 150, 126),
-         stone=(160, 150, 130), glow=None),
+         stone=(160, 150, 130), glow=None, ambient=1.0,
+         decor=["pyramid", "fern", "medallion", "fern", "totem", "fern"]),
     dict(name="temple", floor=floor_temple, groove=(100, 62, 36), lip=(186, 160, 118),
-         stone=(176, 150, 112), glow=None),
+         stone=(176, 150, 112), glow=None, ambient=1.0,
+         decor=["pyramid", "totem", "medallion", "totem", "pyramid"]),
     dict(name="night", floor=floor_night, groove=(34, 30, 40), lip=(110, 118, 140),
-         stone=(118, 122, 138), glow=(255, 150, 50)),
+         stone=(118, 122, 138), glow=(255, 150, 50), ambient=0.55,
+         decor=["brazier", "pyramid", "brazier", "totem", "brazier", "medallion"]),
+    dict(name="volcano", floor=floor_volcano, groove=(30, 20, 20), lip=(96, 80, 76),
+         stone=(110, 92, 86), glow=(255, 90, 30), ambient=0.75,
+         decor=["lava", "pyramid", "lava", "totem", "lava"]),
+    dict(name="jade", floor=floor_jade, groove=(20, 60, 56), lip=(200, 170, 100),
+         stone=(170, 176, 150), glow=None, ambient=1.0,
+         decor=["pond", "medallion", "totem", "pond", "pyramid"]),
 ]
 
 
-def render_theme(t):
+def render_level(t, L, seed):
     cv = Canvas()
     cv.each(lambda x, y, c: t["floor"](x, y))
-    # scenery in the corners, outside the spiral
-    pyramid(cv, 2, 159, 28, 4, t["stone"])
-    pyramid(cv, 210, 159, 28, 4, t["stone"])
-    corner_medallion(cv, 14, 22, t["stone"])
-    corner_medallion(cv, 226, 24, t["stone"])
-    draw_track(cv, t["groove"], t["lip"])
-    sun_stone(cv, CX, CY, 20, t["stone"])
-    end_hole(cv, END[0], END[1])
-    serpent_head(cv)
+    glows = []
+    place_scenery(cv, L, t, seed, glows)
+    draw_track(cv, L, t["groove"], t["lip"])
+    sun_stone(cv, L.frog[0], L.frog[1], 20, t["stone"])
+    end_hole(cv, L.end[0], L.end[1])
+    serpent_head(cv, L)
     if t["glow"]:
-        glows = [(16, 128), (224, 128), (14, 22), (226, 24), (120, 84)]
+        glows.append(L.frog)
         def light(x, y, c):
-            k = 0.55
+            k = t["ambient"]
             add = [0.0, 0.0, 0.0]
             for gx, gy in glows:
                 d = math.hypot(x - gx, y - gy)
@@ -450,12 +702,6 @@ def render_theme(t):
                     add[i] += t["glow"][i] * g * 0.25
             return tuple(clamp(c[i] * k + add[i]) for i in range(3))
         cv.each(light)
-        # torch flames on the pyramid shrines
-        for fx in (16, 224):
-            for i, col in enumerate([(255, 240, 150), (255, 170, 40), (220, 70, 20)]):
-                disc(cv, fx, 136 - i, 2.2 - i * 0.5 + 1, col) if i == 2 else None
-            disc(cv, fx, 135, 2.2, (255, 170, 40))
-            disc(cv, fx, 135.5, 1.2, (255, 240, 150))
     hud_bar(cv)
     return cv
 
@@ -655,7 +901,8 @@ def pal_to_rgb(pal):
 
 title_cv = render_title()
 title_pal, title_tiles, title_idx = bg_image(title_cv)
-theme_imgs = [bg_image(render_theme(t)) for t in THEMES]
+level_imgs = [[bg_image(render_level(t, L, li * 7 + ti)) for ti, t in enumerate(THEMES)]
+              for li, L in enumerate(LAYOUTS)]
 
 # ---------------------------------------------------------------- sprite palettes
 BALL_COLORS = [
@@ -775,8 +1022,8 @@ GLYPHS = {
     "-": "..... ..... ..... .###. ..... ..... .....",
     ">": "#.... .#... ..#.. ...#. ..#.. .#... #....",
 }
-# three styles: plain (transparent), on a panel, highlighted on a panel
-FONT_STYLES = [(1, 2, 0), (1, 2, 3), (6, 2, 3)]
+# styles: plain, on a panel, highlighted on a panel, gold (no panel)
+FONT_STYLES = [(1, 2, 0), (1, 2, 3), (6, 2, 3), (6, 2, 0)]
 font_tiles = []
 for fg, sh, bgc in FONT_STYLES:
     for ch in FONT_CHARS:
@@ -830,7 +1077,7 @@ def c_array2(ctype, name, rows, per_line=8, fmt="{}"):
     return out + "};\n"
 
 
-NT = len(THEMES)
+NL, NT = len(LAYOUTS), len(THEMES)
 IMG_WORDS = len(title_tiles)
 hdr = f"""// Generated by tools/gen_assets.py - do not edit.
 #ifndef ASSETS_H
@@ -838,9 +1085,6 @@ hdr = f"""// Generated by tools/gen_assets.py - do not edit.
 
 #include <stdint.h>
 
-#define PATH_LEN {len(PATH)}
-#define FROG_X {CX}
-#define FROG_Y {CY}
 #define TITLE_FROG_X {TITLE_FROG[0]}
 #define TITLE_FROG_Y {TITLE_FROG[1]}
 #define FROG_TILE {FROG_TILE}
@@ -849,19 +1093,26 @@ hdr = f"""// Generated by tools/gen_assets.py - do not edit.
 #define FONT_CHARS "{FONT_CHARS}"
 #define FONT_NCHARS {len(FONT_CHARS)}
 #define FRAME_TILE {len(FONT_CHARS) * len(FONT_STYLES)}
+#define NUM_LAYOUTS {NL}
 #define NUM_THEMES {NT}
 #define BG_FIRST_COLOR {BG_FIRST_COLOR}
 #define BG_IMG_WORDS {IMG_WORDS}
 
-extern const int16_t path_x[PATH_LEN];
-extern const int16_t path_y[PATH_LEN];
+typedef struct {{
+    const int16_t *x, *y;   // path points, 1px apart
+    int16_t len;
+    int16_t hide;           // balls before this point are inside the serpent
+    int16_t frog_x, frog_y;
+}} Layout;
+
+extern const Layout layouts[NUM_LAYOUTS];
 extern const int16_t sin_tab[256];
 extern const uint16_t font_pal[16];
 extern const uint16_t obj_pal[{len(obj_pal)}];
 extern const uint16_t title_pal[256];
 extern const uint32_t title_tiles[BG_IMG_WORDS];
-extern const uint16_t theme_pal[NUM_THEMES][256];
-extern const uint32_t theme_tiles[NUM_THEMES][BG_IMG_WORDS];
+extern const uint16_t *const level_pal[NUM_LAYOUTS][NUM_THEMES];
+extern const uint32_t *const level_tiles[NUM_LAYOUTS][NUM_THEMES];
 extern const uint32_t obj_tiles[{len(obj_tiles)}];
 extern const uint32_t font_tiles[{len(font_tiles)}];
 
@@ -869,22 +1120,41 @@ extern const uint32_t font_tiles[{len(font_tiles)}];
 """
 
 src = "// Generated by tools/gen_assets.py - do not edit.\n#include \"assets.h\"\n\n"
-src += c_array("int16_t", "path_x", [p[0] for p in PATH], 16)
-src += c_array("int16_t", "path_y", [p[1] for p in PATH], 16)
+for i, L in enumerate(LAYOUTS):
+    src += c_array("int16_t", f"path{i}_x", [p[0] for p in L.path], 16).replace("const", "static const", 1)
+    src += c_array("int16_t", f"path{i}_y", [p[1] for p in L.path], 16).replace("const", "static const", 1)
+src += "const Layout layouts[NUM_LAYOUTS] = {\n"
+for i, L in enumerate(LAYOUTS):
+    src += f"    {{ path{i}_x, path{i}_y, {len(L.path)}, {L.hide}, {L.frog[0]}, {L.frog[1]} }},  // {L.name}\n"
+src += "};\n"
 src += c_array("int16_t", "sin_tab", sin_tab, 16)
 src += c_array("uint16_t", "font_pal", font_pal, 8, "0x{:04X}")
 src += c_array("uint16_t", "obj_pal", obj_pal, 8, "0x{:04X}")
 src += c_array("uint16_t", "title_pal", title_pal, 8, "0x{:04X}")
 src += c_array("uint32_t", "title_tiles", title_tiles, 8, "0x{:08X}")
-src += c_array2("uint16_t", "theme_pal", [t[0] for t in theme_imgs], 8, "0x{:04X}")
-src += c_array2("uint32_t", "theme_tiles", [t[1] for t in theme_imgs], 8, "0x{:08X}")
 src += c_array("uint32_t", "obj_tiles", obj_tiles, 8, "0x{:08X}")
 src += c_array("uint32_t", "font_tiles", font_tiles, 8, "0x{:08X}")
+
+lvl = "// Generated by tools/gen_assets.py - do not edit.\n#include \"assets.h\"\n\n"
+for li in range(NL):
+    for ti in range(NT):
+        pal, tiles, _ = level_imgs[li][ti]
+        lvl += c_array("uint16_t", f"pal_{li}_{ti}", pal, 8, "0x{:04X}").replace("const", "static const", 1)
+        lvl += c_array("uint32_t", f"tiles_{li}_{ti}", tiles, 8, "0x{:08X}").replace("const", "static const", 1)
+lvl += "const uint16_t *const level_pal[NUM_LAYOUTS][NUM_THEMES] = {\n"
+for li in range(NL):
+    lvl += "    { " + ", ".join(f"pal_{li}_{ti}" for ti in range(NT)) + " },\n"
+lvl += "};\nconst uint32_t *const level_tiles[NUM_LAYOUTS][NUM_THEMES] = {\n"
+for li in range(NL):
+    lvl += "    { " + ", ".join(f"tiles_{li}_{ti}" for ti in range(NT)) + " },\n"
+lvl += "};\n"
 
 with open(os.path.join(ROOT, "include", "assets.h"), "w") as f:
     f.write(hdr)
 with open(os.path.join(ROOT, "source", "assets.c"), "w") as f:
     f.write(src)
+with open(os.path.join(ROOT, "source", "assets_levels.c"), "w") as f:
+    f.write(lvl)
 
 
 # ---------------------------------------------------------------- previews
@@ -901,7 +1171,7 @@ def write_png(path, rows):
         f.write(chunk(b"IEND", b""))
 
 
-def preview(name, pal, idx, frog_at, balls, text=()):
+def render_preview(pal, idx, frog_at, path, balls, text=()):
     rgb = pal_to_rgb(pal)
     img = [[rgb[idx[y][x]] for x in range(W)] for y in range(H)]
 
@@ -913,7 +1183,7 @@ def preview(name, pal, idx, frog_at, balls, text=()):
 
     blit(frog, frog_at[0] - 16, frog_at[1] - 16, FROG_PAL)
     for i in range(balls):
-        px, py = PATH[40 + i * 8]
+        px, py = path[i * 8]
         blit(ball, px - 4, py - 4, [(0, 0, 0)] + BALL_COLORS[(i * 7 // 3) % 5])
     for tx, ty, s in text:
         for i, ch in enumerate(s):
@@ -923,13 +1193,35 @@ def preview(name, pal, idx, frog_at, balls, text=()):
                     if p == "#":
                         img[ty * 8 + r + 1][(tx + i) * 8 + c + 2] = FONT_PAL[2]
                         img[ty * 8 + r][(tx + i) * 8 + c + 1] = FONT_PAL[1]
-    k = 3
-    big = [[img[y // k][x // k] for x in range(W * k)] for y in range(H * k)]
-    write_png(os.path.join(ROOT, "build", f"preview_{name}.png"), big)
+    return img
+
+
+def sheet(name, imgs, cols, k=1):
+    rows = (len(imgs) + cols - 1) // cols
+    out = [[(0, 0, 0)] * (cols * (W + 4) * k) for _ in range(rows * (H + 4) * k)]
+    for n, img in enumerate(imgs):
+        ox, oy = (n % cols) * (W + 4), (n // cols) * (H + 4)
+        for y in range(H * k):
+            for x in range(W * k):
+                out[oy * k + y][ox * k + x] = img[y // k][x // k]
+    write_png(os.path.join(ROOT, "build", f"preview_{name}.png"), out)
 
 
 os.makedirs(os.path.join(ROOT, "build"), exist_ok=True)
-preview("title", title_pal, title_idx, TITLE_FROG, 0, [(9, 15, "PRESS START")])
-for t, (pal, _, idx) in zip(THEMES, theme_imgs):
-    preview(t["name"], pal, idx, (CX, CY), 30, [(0, 0, "SCORE 000120"), (21, 0, "LEVEL 01")])
-print(f"path length {len(PATH)} px, end {END}")
+sheet("title", [render_preview(title_pal, title_idx, TITLE_FROG, [], 0, [(9, 15, "PRESS START")])], 1, 3)
+levels = []
+for lv in range(NL):
+    li, ti = lv % NL, lv % NT
+    L = LAYOUTS[li]
+    pal, _, idx = level_imgs[li][ti]
+    levels.append(render_preview(pal, idx, L.frog, L.path[L.hide:], 25,
+                                 [(0, 0, "SCORE 000120"), (21, 0, "LEVEL %02d" % (lv + 1))]))
+sheet("levels", levels, 2)
+themes = []
+for ti in range(NT):
+    L = LAYOUTS[0]
+    pal, _, idx = level_imgs[0][ti]
+    themes.append(render_preview(pal, idx, L.frog, L.path[L.hide:], 0))
+sheet("themes", themes, 3)
+for L in LAYOUTS:
+    print(f"{L.name:12s} length {len(L.path):4d} px  frog {L.frog}  enters {L.edge}")

@@ -48,6 +48,17 @@ make
 open -a mGBA zuma-gba.gba
 ```
 
+## Modes
+
+- **Adventure** - six track layouts and five Aztec themes (jungle, temple,
+  night, volcano, jade); the combination changes every level and only
+  repeats after 30 levels.
+- **Endless** - the classic spiral track with a random theme and a chain
+  that never stops; it speeds up every 20 seconds.
+
+High scores and settings are saved to cartridge SRAM (a `.sav` file in
+emulators).
+
 ## Controls
 
 | Button | Action |
@@ -56,7 +67,10 @@ open -a mGBA zuma-gba.gba
 | L / R | Spin the frog quickly |
 | A | Shoot |
 | B | Swap current and next ball |
-| Start | Start game / pause menu (Up/Down + A to choose) |
+| Start | Pause menu |
+
+The aim and shoot/swap buttons can be swapped in **Settings** (main menu or
+pause menu).
 
 ## Project layout
 
@@ -64,10 +78,12 @@ open -a mGBA zuma-gba.gba
 source/main.c     Game loop, input, rendering (sprites + tile backgrounds)
 source/chain.c    Ball chain logic: spawning, pushing, matching, roll-back combos
 source/sound.c    Music and sound effects on the GBA's PSG channels
-source/assets.c   Generated: track path, sine table, palettes, tiles, font
+source/ui.c       Text, panels and menus
+source/save.c     High scores and settings in SRAM
+source/assets*.c  Generated: track layouts, level images, palettes, tiles, font
 include/          Headers (gba.h has the hardware registers)
-tools/gen_assets.py  Draws all artwork (title, 3 level themes, sprites, font) and
-                     writes assets.c/assets.h plus build/preview_*.png
+tools/gen_assets.py  Defines the track layouts and draws all artwork, writing
+                     assets*.c/assets.h plus build/preview_*.png
 tests/            Host-side tests for the chain logic
 ```
 
