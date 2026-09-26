@@ -54,7 +54,8 @@ open -a mGBA zuma-gba.gba
   night, volcano, jade); the combination changes every level and only
   repeats after 30 levels.
 - **Endless** - the classic spiral track with a random theme and a chain
-  that never stops; it speeds up every 20 seconds.
+  that never stops; it speeds up every 15 seconds and adds a fifth color
+  after 90 seconds.
 
 High scores and settings are saved to cartridge SRAM (a `.sav` file in
 emulators).

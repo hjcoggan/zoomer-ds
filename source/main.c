@@ -432,7 +432,9 @@ static void restart(void)
 static int32_t chain_speed(void)
 {
     // roll in quickly until the head is a quarter of the way along
-    // (measured from where balls leave the serpent's mouth)
+    // (measured from where balls leave the serpent's mouth). Endless mode
+    // does this again whenever the chain gets short, so it never sits empty.
+    if (mode == MODE_ENDLESS) rolling_in = 1;
     if (rolling_in) {
         int32_t target = (layout->hide + (layout->len - layout->hide) / 4) << 8;
         if (chain.count == 0 || chain.pos[chain.count - 1] < target)
@@ -441,10 +443,10 @@ static int32_t chain_speed(void)
     }
     int speed;
     if (mode == MODE_ENDLESS)
-        speed = 28 + play_frames / (60 * 20);   // a little faster every 20 seconds
+        speed = 34 + play_frames / (60 * 15);   // a little faster every 15 seconds
     else
         speed = 24 + level * 3;
-    return speed > 72 ? 72 : speed;             // 8.8 px/frame
+    return speed > 80 ? 80 : speed;             // 8.8 px/frame
 }
 
 static void fire(void)
@@ -537,7 +539,7 @@ static void update_play(uint16_t pressed)
     update_shot();
 
     play_frames++;
-    if (mode == MODE_ENDLESS && play_frames == 60 * 120) chain.ncolors = 5;
+    if (mode == MODE_ENDLESS && play_frames == 60 * 90) chain.ncolors = 5;
 
     int before = score;
     ChainState cs = chain_update(&chain, chain_speed(), &score);
