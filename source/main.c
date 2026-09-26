@@ -432,8 +432,10 @@ static void restart(void)
 static int32_t chain_speed(void)
 {
     // roll in quickly until the head is a quarter of the way along
+    // (measured from where balls leave the serpent's mouth)
     if (rolling_in) {
-        if (chain.count > 0 && chain.pos[chain.count - 1] < (layout->len / 4) << 8)
+        int32_t target = (layout->hide + (layout->len - layout->hide) / 4) << 8;
+        if (chain.count == 0 || chain.pos[chain.count - 1] < target)
             return ROLL_IN_SPEED;
         rolling_in = 0;
     }
