@@ -1217,6 +1217,10 @@ for lv in range(NL):
     levels.append(render_preview(pal, idx, L.frog, L.path[L.hide:], 25,
                                  [(0, 0, "SCORE 000120"), (21, 0, "LEVEL %02d" % (lv + 1))]))
 sheet("levels", levels, 2)
+for n, img in enumerate(levels):
+    k = 2
+    write_png(os.path.join(ROOT, "build", f"shot_level{n + 1}.png"),
+              [[img[y // k][x // k] for x in range(W * k)] for y in range(H * k)])
 themes = []
 for ti in range(NT):
     L = LAYOUTS[0]
