@@ -241,7 +241,7 @@ static void go_title(void)
     draw_title_text();
     state = ST_TITLE;
     fade(0);
-    music_play();
+    music_play(0);
 }
 
 static int menu_move(uint16_t pressed, int n)
@@ -270,17 +270,26 @@ static void open_settings(State back)
 
 // ---------------------------------------------------------------- credits
 
-static const char *const credit_roles[] = {
-    "GAME DIRECTOR", "CREATIVE DIRECTOR", "TECHNICAL DIRECTOR", "PRODUCER",
-    "LEAD GAME DESIGNER", "LEVEL DESIGNER", "SYSTEMS DESIGNER", "NARRATIVE DESIGNER",
-    "LEAD PROGRAMMER", "GAMEPLAY PROGRAMMER", "ENGINE PROGRAMMER", "GRAPHICS PROGRAMMER",
-    "AUDIO PROGRAMMER", "TOOLS PROGRAMMER", "UI PROGRAMMER", "BUILD ENGINEER",
-    "ART DIRECTOR", "LEAD ARTIST", "PIXEL ARTIST", "ENVIRONMENT ARTIST",
-    "CHARACTER ARTIST", "ANIMATOR", "UI ARTIST", "COMPOSER", "SOUND DESIGNER",
-    "QA LEAD", "QA TESTER", "BALANCE TESTER", "LOCALIZATION", "MARKETING",
-    "COMMUNITY MANAGER", "FROG WRANGLER", "BALL POLISHER",
+static const struct { const char *role, *name; } credits[] = {
+    { "GAME DIRECTOR", "HEATH" }, { "CREATIVE DIRECTOR", "CLAUDE" },
+    { "TECHNICAL DIRECTOR", "CLAUDE" }, { "PRODUCER", "CLAUDE" },
+    { "LEAD GAME DESIGNER", "CLAUDE" }, { "LEVEL DESIGNER", "CLAUDE" },
+    { "SYSTEMS DESIGNER", "CLAUDE" }, { "NARRATIVE DESIGNER", "CLAUDE" },
+    { "LEAD PROGRAMMER", "CLAUDE" }, { "GAMEPLAY PROGRAMMER", "CLAUDE" },
+    { "ENGINE PROGRAMMER", "CLAUDE" }, { "GRAPHICS PROGRAMMER", "CLAUDE" },
+    { "AUDIO PROGRAMMER", "CLAUDE" }, { "TOOLS PROGRAMMER", "CLAUDE" },
+    { "UI PROGRAMMER", "CLAUDE" }, { "BUILD ENGINEER", "CLAUDE" },
+    { "ART DIRECTOR", "CLAUDE" }, { "LEAD ARTIST", "CLAUDE" },
+    { "PIXEL ARTIST", "CLAUDE" }, { "ENVIRONMENT ARTIST", "CLAUDE" },
+    { "CHARACTER ARTIST", "CLAUDE" }, { "ANIMATOR", "CLAUDE" },
+    { "UI ARTIST", "CLAUDE" }, { "COMPOSER", "CLAUDE" },
+    { "SOUND DESIGNER", "CLAUDE" }, { "QA LEAD", "CLAUDE" },
+    { "QA TESTER", "HEATH" }, { "BALANCE TESTER", "HEATH" },
+    { "LOCALIZATION", "CLAUDE" }, { "MARKETING", "CLAUDE" },
+    { "COMMUNITY MANAGER", "CLAUDE" }, { "FROG WRANGLER", "CLAUDE" },
+    { "BALL POLISHER", "CLAUDE" },
 };
-#define NUM_ROLES ((int)(sizeof(credit_roles) / sizeof(credit_roles[0])))
+#define NUM_ROLES ((int)(sizeof(credits) / sizeof(credits[0])))
 #define CREDITS_LEAD 20           // blank rows so the list starts below the screen
 #define CREDITS_HEAD 4            // "ZUMA GBA", blank, "CREDITS", blank
 #define CREDITS_END (CREDITS_LEAD + CREDITS_HEAD + NUM_ROLES * 3 + 3)
@@ -296,8 +305,8 @@ static void credits_write_row(int r)
     if (i < 0) return;
     int role = i / 3;
     if (role < NUM_ROLES) {
-        if (i % 3 == 0) text_center(r, credit_roles[role], TXT_PLAIN);
-        if (i % 3 == 1) text_center(r, "CLAUDE", TXT_GOLD);
+        if (i % 3 == 0) text_center(r, credits[role].role, TXT_PLAIN);
+        if (i % 3 == 1) text_center(r, credits[role].name, TXT_GOLD);
     } else if (r == CREDITS_END) {
         text_center(r, "THANKS FOR PLAYING!", TXT_GOLD);
     }
@@ -365,7 +374,7 @@ static void draw_hud(void)
     }
 }
 
-static void begin_play(int layout_index, int theme, int total, int ncolors)
+static void begin_play(int layout_index, int theme, int song, int total, int ncolors)
 {
     fade(1);
     music_stop();
@@ -383,7 +392,7 @@ static void begin_play(int layout_index, int theme, int total, int ncolors)
     draw_hud();
     state = ST_PLAY;
     fade(0);
-    music_play();
+    music_play(song);
 }
 
 static void start_level(void)
@@ -395,7 +404,9 @@ static void start_level(void)
     int total = 25 + level * 5;
     if (total > 90) total = 90;
     int ncolors = level < 3 ? 3 : level < 6 ? 4 : 5;
-    begin_play((level - 1) % NUM_LAYOUTS, (level - 1) % NUM_THEMES, total, ncolors);
+    // each theme has its own song
+    int theme = (level - 1) % NUM_THEMES;
+    begin_play((level - 1) % NUM_LAYOUTS, theme, theme % NUM_SONGS, total, ncolors);
 }
 
 static void new_adventure(void)
@@ -413,7 +424,7 @@ static void start_endless(void)
     best_at_start = save.best_endless;
     score = 0;
     level = 0;
-    begin_play(ENDLESS_LAYOUT, rand_next(&rng) % NUM_THEMES, -1, 4);
+    begin_play(ENDLESS_LAYOUT, rand_next(&rng) % NUM_THEMES, rand_next(&rng) % NUM_SONGS, -1, 4);
 }
 
 static void restart(void)

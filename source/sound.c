@@ -25,50 +25,166 @@
 #define DUTY(d) ((d) << 6)
 
 // ---------------------------------------------------------------- the song
-// A minor pentatonic jungle groove, 8 bars of 16 steps.
+// Each song is 8 bars of 16 steps (16th notes).
 // Tokens: note like A4 or C#5, "--" holds the previous note, ".." is silence.
+// Drums: K kick, S snare, H hi-hat, T low tom, - nothing.
 #define STEPS_PER_BAR 16
 #define BARS 8
-#define STEP_FRAMES 7                 // ~128 BPM in 16th notes
+#define SONG_STEPS (BARS * STEPS_PER_BAR)
 
-static const char *const lead_src[BARS] = {
-    "A4 -- C5 -- D5 -- E5 -- G5 -- E5 -- D5 -- C5 --",
-    "D5 -- E5 -- A4 -- -- -- C5 D5 C5 -- A4 -- -- ..",
-    "E5 -- G5 -- A5 -- G5 E5 D5 -- E5 -- G5 -- -- --",
-    "A5 -- G5 -- E5 -- D5 -- C5 -- D5 -- A4 -- -- ..",
-    "C5 C5 .. C5 D5 -- E5 -- G5 G5 .. G5 A5 -- G5 --",
-    "E5 -- D5 -- C5 -- D5 -- E5 -- -- -- .. .. .. ..",
-    "C5 C5 .. C5 D5 -- E5 -- G5 G5 .. G5 A5 -- C6 --",
-    "A5 -- G5 -- E5 -- D5 -- E5 -- -- -- A4 -- -- ..",
-};
+typedef struct {
+    const char *lead[BARS];
+    const char *bass[BARS];
+    const char *drums[BARS];
+    uint8_t step_frames;      // tempo: frames per 16th note
+    uint8_t duty;             // lead square duty: 0 12.5%, 1 25%, 2 50%
+    uint8_t lead_vol;         // lead envelope start volume (0-15)
+    uint8_t lead_decay;       // lead envelope step time (bigger = longer notes)
+    uint8_t bass_vol;         // wave channel volume: 1 100%, 2 50%, 3 25%
+} Song;
 
-static const char *const bass_src[BARS] = {
-    "A2 -- .. A2 A3 -- A2 -- A2 -- .. A2 G2 -- G2 --",
-    "F2 -- .. F2 F3 -- F2 -- G2 -- .. G2 E2 -- E2 --",
-    "C3 -- .. C3 C3 -- G2 -- C3 -- .. C3 G2 -- E2 --",
-    "F2 -- .. F2 G2 -- G2 -- A2 -- .. A2 A2 -- .. ..",
-    "A2 -- .. A2 A3 -- A2 -- E2 -- .. E2 E3 -- E2 --",
-    "F2 -- .. F2 F3 -- F2 -- G2 -- .. G2 G3 -- G2 --",
-    "A2 -- .. A2 A3 -- A2 -- E2 -- .. E2 E3 -- E2 --",
-    "F2 -- .. F2 G2 -- G2 -- A2 -- A2 -- A2 -- .. ..",
-};
-
-// K kick, S snare, H hi-hat, T low tom, - nothing
-static const char *const drum_src[BARS] = {
-    "K-H-S-HKK-H-S-HH",
-    "K-H-S-HKK-H-S-HH",
-    "K-H-S-HKK-H-S-HH",
-    "K-H-S-HKK-H-STTT",
-    "K-H-S-HKK-H-S-HH",
-    "K-H-S-HKK-H-S-HH",
-    "K-H-S-HKK-H-S-HH",
-    "K-H-S-HKS-SSTTTT",
+static const Song songs[NUM_SONGS] = {
+    {   // 0: Jungle Groove - A minor pentatonic, ~128 BPM
+        .lead = {
+            "A4 -- C5 -- D5 -- E5 -- G5 -- E5 -- D5 -- C5 --",
+            "D5 -- E5 -- A4 -- -- -- C5 D5 C5 -- A4 -- -- ..",
+            "E5 -- G5 -- A5 -- G5 E5 D5 -- E5 -- G5 -- -- --",
+            "A5 -- G5 -- E5 -- D5 -- C5 -- D5 -- A4 -- -- ..",
+            "C5 C5 .. C5 D5 -- E5 -- G5 G5 .. G5 A5 -- G5 --",
+            "E5 -- D5 -- C5 -- D5 -- E5 -- -- -- .. .. .. ..",
+            "C5 C5 .. C5 D5 -- E5 -- G5 G5 .. G5 A5 -- C6 --",
+            "A5 -- G5 -- E5 -- D5 -- E5 -- -- -- A4 -- -- ..",
+        },
+        .bass = {
+            "A2 -- .. A2 A3 -- A2 -- A2 -- .. A2 G2 -- G2 --",
+            "F2 -- .. F2 F3 -- F2 -- G2 -- .. G2 E2 -- E2 --",
+            "C3 -- .. C3 C3 -- G2 -- C3 -- .. C3 G2 -- E2 --",
+            "F2 -- .. F2 G2 -- G2 -- A2 -- .. A2 A2 -- .. ..",
+            "A2 -- .. A2 A3 -- A2 -- E2 -- .. E2 E3 -- E2 --",
+            "F2 -- .. F2 F3 -- F2 -- G2 -- .. G2 G3 -- G2 --",
+            "A2 -- .. A2 A3 -- A2 -- E2 -- .. E2 E3 -- E2 --",
+            "F2 -- .. F2 G2 -- G2 -- A2 -- A2 -- A2 -- .. ..",
+        },
+        .drums = {
+            "K-H-S-HKK-H-S-HH", "K-H-S-HKK-H-S-HH", "K-H-S-HKK-H-S-HH", "K-H-S-HKK-H-STTT",
+            "K-H-S-HKK-H-S-HH", "K-H-S-HKK-H-S-HH", "K-H-S-HKK-H-S-HH", "K-H-S-HKS-SSTTTT",
+        },
+        .step_frames = 7, .duty = 2, .lead_vol = 10, .lead_decay = 3, .bass_vol = 1,
+    },
+    {   // 1: Temple Steps - D dorian march, ~112 BPM
+        .lead = {
+            "D5 -- -- A4 D5 -- E5 -- F5 -- E5 -- D5 -- A4 --",
+            "C5 -- -- G4 C5 -- D5 -- E5 -- D5 -- C5 -- -- --",
+            "F5 -- -- C5 F5 -- G5 -- A5 -- G5 -- F5 -- E5 --",
+            "D5 -- -- -- B4 -- -- -- G4 -- A4 -- B4 -- -- ..",
+            "A5 -- G5 -- F5 -- E5 -- D5 -- E5 -- F5 -- A5 --",
+            "G5 -- F5 -- E5 -- D5 -- C5 -- D5 -- E5 -- G5 --",
+            "B5 -- A5 -- G5 -- F5 -- E5 -- D5 -- B4 -- D5 --",
+            "E5 -- -- -- C#5 -- -- -- D5 -- -- -- -- -- .. ..",
+        },
+        .bass = {
+            "D2 -- .. .. A2 -- .. .. D2 -- .. .. A2 -- .. ..",
+            "C2 -- .. .. G2 -- .. .. C2 -- .. .. G2 -- .. ..",
+            "F2 -- .. .. C3 -- .. .. F2 -- .. .. C3 -- .. ..",
+            "G2 -- .. .. D3 -- .. .. G2 -- .. .. D3 -- .. ..",
+            "D2 -- .. .. A2 -- .. .. D2 -- .. .. A2 -- .. ..",
+            "C2 -- .. .. G2 -- .. .. C2 -- .. .. G2 -- .. ..",
+            "G2 -- .. .. D3 -- .. .. G2 -- .. .. D3 -- .. ..",
+            "A2 -- .. .. E2 -- .. .. D2 -- .. .. .. .. .. ..",
+        },
+        .drums = {
+            "K---S---K-K-S---", "K---S---K-K-S---", "K---S---K-K-S---", "K---S---K-K-S-SS",
+            "K-H-S-H-K-HKS-H-", "K-H-S-H-K-HKS-H-", "K-H-S-H-K-HKS-H-", "K-H-S-H-K-S-TTTT",
+        },
+        .step_frames = 8, .duty = 1, .lead_vol = 10, .lead_decay = 4, .bass_vol = 1,
+    },
+    {   // 2: Night Ritual - E phrygian, slow and sparse, ~100 BPM
+        .lead = {
+            "E5 -- -- -- -- -- F5 -- E5 -- -- -- B4 -- -- --",
+            "C5 -- -- -- B4 -- A4 -- B4 -- -- -- -- -- .. ..",
+            "E5 -- -- -- G5 -- -- -- F5 -- E5 -- D5 -- -- --",
+            "E5 -- -- -- -- -- -- -- .. .. .. .. .. .. .. ..",
+            "B5 -- -- -- A5 -- G5 -- F5 -- -- -- E5 -- -- --",
+            "G5 -- F5 -- E5 -- D5 -- E5 -- -- -- .. .. .. ..",
+            "C6 -- -- -- B5 -- -- -- A5 -- G5 -- F5 -- -- --",
+            "E5 -- -- -- -- -- -- -- .. .. .. .. .. .. .. ..",
+        },
+        .bass = {
+            "E2 -- -- -- -- -- -- -- E2 -- -- -- F2 -- -- --",
+            "E2 -- -- -- -- -- -- -- D2 -- -- -- E2 -- -- --",
+            "E2 -- -- -- -- -- -- -- E2 -- -- -- F2 -- -- --",
+            "E2 -- -- -- -- -- -- -- D2 -- -- -- E2 -- -- --",
+            "C3 -- -- -- -- -- -- -- B2 -- -- -- A2 -- -- --",
+            "G2 -- -- -- -- -- -- -- F2 -- -- -- E2 -- -- --",
+            "C3 -- -- -- -- -- -- -- B2 -- -- -- A2 -- -- --",
+            "F2 -- -- -- -- -- -- -- E2 -- -- -- -- -- -- --",
+        },
+        .drums = {
+            "K---T---K-T-T---", "K---T---K-T-T---", "K---T---K-T-T---", "K---T---K-T-TTT-",
+            "K---T---K-T-T---", "K---T---K-T-T---", "K---T---K-T-T---", "K---T-T-K-TTTTTT",
+        },
+        .step_frames = 9, .duty = 2, .lead_vol = 9, .lead_decay = 6, .bass_vol = 2,
+    },
+    {   // 3: Volcano Run - C minor, fast and driving, ~150 BPM
+        .lead = {
+            "C5 C5 D#5 C5 G5 -- F5 D#5 D5 -- D#5 -- C5 -- -- --",
+            "G#4 G#4 C5 G#4 D#5 -- D5 C5 A#4 -- C5 -- G#4 -- -- --",
+            "A#4 A#4 D5 A#4 F5 -- D#5 D5 C5 -- D5 -- A#4 -- -- --",
+            "G4 -- B4 -- D5 -- F5 -- G5 -- F5 -- D5 -- B4 --",
+            "C6 -- A#5 -- G5 -- D#5 -- G5 -- A#5 -- C6 -- -- --",
+            "G#5 -- G5 -- D#5 -- C5 -- D#5 -- G5 -- G#5 -- -- --",
+            "A#5 -- G#5 -- F5 -- D5 -- F5 -- G#5 -- A#5 -- -- --",
+            "G5 -- -- -- F5 -- -- -- D5 -- -- -- B4 -- -- --",
+        },
+        .bass = {
+            "C2 .. C3 .. C2 .. C3 .. C2 .. C3 .. C2 .. C3 ..",
+            "G#1 .. G#2 .. G#1 .. G#2 .. G#1 .. G#2 .. G#1 .. G#2 ..",
+            "A#1 .. A#2 .. A#1 .. A#2 .. A#1 .. A#2 .. A#1 .. A#2 ..",
+            "G1 .. G2 .. G1 .. G2 .. G1 .. G2 .. G1 .. G2 ..",
+            "C2 .. C3 .. C2 .. C3 .. C2 .. C3 .. C2 .. C3 ..",
+            "G#1 .. G#2 .. G#1 .. G#2 .. G#1 .. G#2 .. G#1 .. G#2 ..",
+            "A#1 .. A#2 .. A#1 .. A#2 .. A#1 .. A#2 .. A#1 .. A#2 ..",
+            "G1 .. G2 .. G1 .. G2 .. G1 .. G2 .. G1 .. G2 ..",
+        },
+        .drums = {
+            "K-HHS-HHK-HHS-HK", "K-HHS-HHK-HHS-HK", "K-HHS-HHK-HHS-HK", "K-HHS-HHK-HHSSSS",
+            "K-HHS-HHK-HHS-HK", "K-HHS-HHK-HHS-HK", "K-HHS-HHK-HHS-HK", "K-HHS-HHKSSSTTTT",
+        },
+        .step_frames = 6, .duty = 1, .lead_vol = 10, .lead_decay = 2, .bass_vol = 1,
+    },
+    {   // 4: Jade Waters - G major pentatonic, calm, ~112 BPM
+        .lead = {
+            "B4 -- D5 -- G5 -- -- -- E5 -- D5 -- B4 -- -- --",
+            "A4 -- B4 -- E5 -- -- -- D5 -- B4 -- A4 -- -- --",
+            "G4 -- A4 -- C5 -- E5 -- G5 -- E5 -- C5 -- -- --",
+            "D5 -- -- -- F#5 -- -- -- A5 -- -- -- F#5 -- -- --",
+            "G5 -- A5 -- B5 -- -- -- A5 -- G5 -- E5 -- -- --",
+            "E5 -- G5 -- B5 -- -- -- A5 -- G5 -- E5 -- -- --",
+            "C5 -- E5 -- G5 -- -- -- E5 -- C5 -- E5 -- G5 --",
+            "F#5 -- -- -- A5 -- -- -- G5 -- -- -- -- -- .. ..",
+        },
+        .bass = {
+            "G2 -- -- -- D3 -- -- -- B2 -- -- -- D3 -- -- --",
+            "E2 -- -- -- B2 -- -- -- G2 -- -- -- B2 -- -- --",
+            "C3 -- -- -- G2 -- -- -- E3 -- -- -- G2 -- -- --",
+            "D2 -- -- -- A2 -- -- -- F#2 -- -- -- A2 -- -- --",
+            "G2 -- -- -- D3 -- -- -- B2 -- -- -- D3 -- -- --",
+            "E2 -- -- -- B2 -- -- -- G2 -- -- -- B2 -- -- --",
+            "C3 -- -- -- G2 -- -- -- E3 -- -- -- G2 -- -- --",
+            "D2 -- -- -- A2 -- -- -- G2 -- -- -- -- -- -- --",
+        },
+        .drums = {
+            "K---H---S---H---", "K---H---S---H---", "K---H---S---H---", "K---H-H-S---H-HH",
+            "K---H---S---H---", "K---H---S---H---", "K---H---S---H---", "K---H-H-S-T-T-TT",
+        },
+        .step_frames = 8, .duty = 0, .lead_vol = 9, .lead_decay = 5, .bass_vol = 2,
+    },
 };
 
 #define HOLD 1
 #define REST 0
-#define SONG_STEPS (BARS * STEPS_PER_BAR)
 
+static const Song *song = &songs[0];
 static uint8_t lead[SONG_STEPS], bass[SONG_STEPS];
 static char drums[SONG_STEPS];
 
@@ -148,11 +264,6 @@ void sound_init(void)
     SND1_SWEEP = 0x0008;
     wave_init();
     build_rates();
-    parse_notes(lead_src, lead);
-    parse_notes(bass_src, bass);
-    for (int bar = 0; bar < BARS; bar++)
-        for (int i = 0; i < STEPS_PER_BAR; i++)
-            drums[bar * STEPS_PER_BAR + i] = drum_src[bar][i];
 }
 
 static void play_drum(char d)
@@ -184,7 +295,7 @@ static void music_step(void)
         SND2_CNT = 0;
         SND2_FREQ = RESTART;
     } else if (n != HOLD) {
-        SND2_CNT = DUTY(2) | ENV(10, 3, 0);
+        SND2_CNT = DUTY(song->duty) | ENV(song->lead_vol, song->lead_decay, 0);
         SND2_FREQ = RESTART | square_rate[n];
     }
 
@@ -192,15 +303,21 @@ static void music_step(void)
     if (n == REST) {
         SND3_CNT = 0;
     } else if (n != HOLD) {
-        SND3_CNT = 1 << 13;       // 100% volume
+        SND3_CNT = song->bass_vol << 13;
         SND3_FREQ = RESTART | wave_rate[n];
     }
 
     play_drum(drums[step]);
 }
 
-void music_play(void)
+void music_play(int index)
 {
+    song = &songs[index % NUM_SONGS];
+    parse_notes(song->lead, lead);
+    parse_notes(song->bass, bass);
+    for (int bar = 0; bar < BARS; bar++)
+        for (int i = 0; i < STEPS_PER_BAR; i++)
+            drums[bar * STEPS_PER_BAR + i] = song->drums[bar][i];
     music_on = 1;
     step = 0;
     step_timer = 0;
@@ -225,7 +342,7 @@ void music_resume(void)
 void sound_update(void)
 {
     if (music_on && --step_timer <= 0) {
-        step_timer = STEP_FRAMES;
+        step_timer = song->step_frames;
         music_step();
         step = (step + 1) % SONG_STEPS;
     }

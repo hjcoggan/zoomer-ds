@@ -158,8 +158,9 @@ tools/gen_assets.py  Defines the track layouts and draws all artwork, writing
 tests/            Host-side tests for the chain logic
 ```
 
-The song is written as text in `source/sound.c` (`lead_src`, `bass_src`,
-`drum_src`), so it is easy to edit.
+There are five songs, one per level theme (endless mode picks one at random).
+They are written as note names in the `songs` table in `source/sound.c`, so
+they are easy to edit.
 
 No libraries are needed beyond devkitARM. After editing the artwork or track in
 `tools/gen_assets.py`, run `make assets`. Run the logic tests with `make test`.

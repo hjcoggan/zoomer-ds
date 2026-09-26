@@ -9,7 +9,9 @@
 void sound_init(void);
 void sound_update(void);     // call once per frame
 
-void music_play(void);       // restart the song from the top
+#define NUM_SONGS 5
+
+void music_play(int song);   // start a song (0 to NUM_SONGS-1) from the top
 void music_stop(void);       // silence, keeping the song position
 void music_resume(void);
 
