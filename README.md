@@ -14,50 +14,108 @@ A Zuma-style marble shooter for the Game Boy Advance.
 > written by Claude, directed and playtested by [@hjcoggan](https://github.com/hjcoggan).
 > See [AI disclosure](#ai-disclosure) below.
 
-## Setup (macOS)
+## Play it
 
-### 1. Install devkitPro (GBA toolchain)
+Download `zuma-gba.gba` from the
+[latest release](https://github.com/hjcoggan/zuma-gba/releases/latest) and open
+it in any GBA emulator ([mGBA](https://mgba.io) is recommended) or on a flash
+cart. No building needed.
 
-Download and run the devkitPro installer for macOS from
-<https://github.com/devkitPro/pacman/releases>, then install the GBA tools:
+## Building from source
+
+You need [devkitPro](https://devkitpro.org)'s GBA toolchain, `make` and `git`.
+Python 3 is only needed if you change the artwork (`make assets`).
+
+### macOS
+
+1. Download and run the devkitPro pacman installer (`.pkg`) from
+   <https://github.com/devkitPro/pacman/releases>, then install the GBA tools:
+
+   ```bash
+   sudo dkp-pacman -S gba-dev
+   ```
+
+2. Add the toolchain to your shell (append to `~/.zshrc`, then `source ~/.zshrc`):
+
+   ```bash
+   export DEVKITPRO=/opt/devkitpro
+   export DEVKITARM=$DEVKITPRO/devkitARM
+   export PATH=$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH
+   ```
+
+3. Install mGBA: `brew install --cask mgba`
+
+4. Build and run:
+
+   ```bash
+   git clone https://github.com/hjcoggan/zuma-gba.git ~/zuma-gba
+   cd ~/zuma-gba
+   make
+   open -a mGBA zuma-gba.gba
+   ```
+
+### Windows
+
+1. Download the graphical installer (`devkitProUpdater`) from
+   <https://github.com/devkitPro/installer/releases> and run it. When it asks
+   which components to install, tick **GBA Development**. It installs to
+   `C:\devkitPro` and sets the `DEVKITPRO`/`DEVKITARM` variables for you.
+
+2. Open **MSYS2** from the devkitPro folder in the Start menu (a bash shell that
+   comes with devkitPro, with `make` and `git`) and build:
+
+   ```bash
+   git clone https://github.com/hjcoggan/zuma-gba.git
+   cd zuma-gba
+   make
+   ```
+
+   If `git` is missing, install it with `pacman -S git`.
+
+3. Install mGBA from <https://mgba.io/downloads.html> and open `zuma-gba.gba`
+   with it (or drag the file onto the mGBA window).
+
+### Linux
+
+1. Install devkitPro pacman. On Debian, Ubuntu and derivatives:
+
+   ```bash
+   wget https://apt.devkitpro.org/install-devkitpro-pacman
+   chmod +x ./install-devkitpro-pacman
+   sudo ./install-devkitpro-pacman
+   ```
+
+   On Arch and other distros, follow
+   <https://devkitpro.org/wiki/devkitPro_pacman>.
+
+2. Install the GBA tools, then log out and back in (or run
+   `source /etc/profile.d/devkit-env.sh`) so the environment variables are set:
+
+   ```bash
+   sudo dkp-pacman -S gba-dev
+   ```
+
+   On Arch-based systems the command is `sudo pacman -S gba-dev` after adding
+   the devkitPro repositories.
+
+3. Install mGBA: `sudo apt install mgba-qt`, or from Flathub with
+   `flatpak install flathub io.mgba.mGBA`.
+
+4. Build and run:
+
+   ```bash
+   git clone https://github.com/hjcoggan/zuma-gba.git
+   cd zuma-gba
+   make
+   mgba-qt zuma-gba.gba
+   ```
+
+### Tests
+
+The ball-chain logic has host-side tests that build with your normal C compiler:
 
 ```bash
-sudo dkp-pacman -S gba-dev
-```
-
-Add the toolchain to your shell (append to `~/.zshrc`):
-
-```bash
-export DEVKITPRO=/opt/devkitpro
-export DEVKITARM=$DEVKITPRO/devkitARM
-export PATH=$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH
-```
-
-Then reload: `source ~/.zshrc`.
-
-### 2. Install an emulator
-
-[mGBA](https://mgba.io) is recommended:
-
-```bash
-brew install --cask mgba
-```
-
-### 3. Clone the repo
-
-```bash
-git clone https://github.com/hjcoggan/zuma-gba.git ~/zuma-gba
-cd ~/zuma-gba
-```
-
-Authenticate with the GitHub CLI (`brew install gh && gh auth login`) rather than
-putting a token in the clone URL.
-
-### 4. Build and run
-
-```bash
-make
-open -a mGBA zuma-gba.gba
+make test
 ```
 
 ## Modes
