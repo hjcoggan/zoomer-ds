@@ -1,5 +1,7 @@
 # Zuma GBA
 
+![Zuma GBA title screen](docs/title-screen.png)
+
 A Zuma-style marble shooter for the Game Boy Advance.
 
 ## Setup (macOS)
