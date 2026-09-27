@@ -30,7 +30,7 @@ static void defaults(void)
     save.best_score = 0;
     save.best_level = 0;
     save.best_endless = 0;
-    save.swap_aim = 0;
+    save.dpad_fast = 1;
     save.swap_buttons = 0;
 }
 
@@ -49,7 +49,7 @@ void save_load(void)
         return;
     }
     save = b.data;
-    save.swap_aim = save.swap_aim ? 1 : 0;
+    save.dpad_fast = save.dpad_fast ? 1 : 0;
     save.swap_buttons = save.swap_buttons ? 1 : 0;
 }
 

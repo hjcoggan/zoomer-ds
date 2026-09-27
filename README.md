@@ -134,8 +134,8 @@ emulators).
 
 | Button | Action |
 | --- | --- |
-| Left / Right | Aim the frog (fine) |
-| L / R | Spin the frog quickly |
+| Left / Right | Spin the frog quickly |
+| L / R | Aim the frog (fine) |
 | A | Shoot |
 | B | Swap current and next ball |
 | Start | Pause menu |

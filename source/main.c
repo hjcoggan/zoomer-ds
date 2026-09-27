@@ -222,11 +222,11 @@ static void draw_pause_menu(void)
 static void draw_settings(void)
 {
     const char *items[SET_COUNT];
-    items[SET_AIM] = save.swap_aim ? "AIM   DPAD FAST" : "AIM   DPAD FINE";
+    items[SET_AIM] = save.dpad_fast ? "AIM   DPAD FAST" : "AIM   DPAD FINE";
     items[SET_BUTTONS] = save.swap_buttons ? "SHOOT B  SWAP A" : "SHOOT A  SWAP B";
     items[SET_BACK] = "BACK";
     int h = menu_draw(5, 20, "SETTINGS", items, SET_COUNT, menu_sel);
-    text_center(5 + h + 1, save.swap_aim ? "L R TO FINE TUNE" : "L R TO SPIN FAST", TXT_GOLD);
+    text_center(5 + h + 1, save.dpad_fast ? "L R TO FINE TUNE" : "L R TO SPIN FAST", TXT_GOLD);
 }
 
 static void go_title(void)
@@ -524,10 +524,10 @@ static void update_play(uint16_t pressed)
         return;
     }
 
-    uint16_t fine_l = save.swap_aim ? KEY_L : KEY_LEFT;
-    uint16_t fine_r = save.swap_aim ? KEY_R : KEY_RIGHT;
-    uint16_t fast_l = save.swap_aim ? KEY_LEFT : KEY_L;
-    uint16_t fast_r = save.swap_aim ? KEY_RIGHT : KEY_R;
+    uint16_t fine_l = save.dpad_fast ? KEY_L : KEY_LEFT;
+    uint16_t fine_r = save.dpad_fast ? KEY_R : KEY_RIGHT;
+    uint16_t fast_l = save.dpad_fast ? KEY_LEFT : KEY_L;
+    uint16_t fast_r = save.dpad_fast ? KEY_RIGHT : KEY_R;
     if (keys & fine_l) angle -= FINE_TURN;
     if (keys & fine_r) angle += FINE_TURN;
     if (keys & fast_l) angle -= FAST_TURN;
@@ -606,7 +606,7 @@ static void update_settings(uint16_t pressed)
     if (menu_move(pressed, SET_COUNT)) draw_settings();
     int back = (pressed & KEY_B) || ((pressed & (KEY_A | KEY_START)) && menu_sel == SET_BACK);
     if (!back && (pressed & (KEY_A | KEY_LEFT | KEY_RIGHT)) && menu_sel != SET_BACK) {
-        if (menu_sel == SET_AIM) save.swap_aim ^= 1;
+        if (menu_sel == SET_AIM) save.dpad_fast ^= 1;
         if (menu_sel == SET_BUTTONS) save.swap_buttons ^= 1;
         save_write();
         sfx_swap();

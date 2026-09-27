@@ -8,7 +8,7 @@ typedef struct {
     int32_t best_score;       // adventure mode
     int32_t best_level;
     int32_t best_endless;
-    uint8_t swap_aim;         // 0: d-pad fine, L/R fast; 1: the other way round
+    uint8_t dpad_fast;        // 1 (default): d-pad spins fast, L/R fine; 0: the other way round
     uint8_t swap_buttons;     // 0: A shoots, B swaps; 1: B shoots, A swaps
 } SaveData;
 
