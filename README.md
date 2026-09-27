@@ -1,8 +1,8 @@
-# Zuma GBA
+# Zoomer GBA
 
-![Zuma GBA title screen](docs/title-screen.png)
+![Zoomer GBA title screen](docs/title-screen.png)
 
-A Zuma-style marble shooter for the Game Boy Advance.
+A marble shooter for the Game Boy Advance, in the style of *Zuma*.
 
 | | |
 | --- | --- |
@@ -16,8 +16,8 @@ A Zuma-style marble shooter for the Game Boy Advance.
 
 ## Play it
 
-Download `zuma-gba.gba` from the
-[latest release](https://github.com/hjcoggan/zuma-gba/releases/latest) and open
+Download `zoomer-gba.gba` from the
+[latest release](https://github.com/hjcoggan/zoomer-gba/releases/latest) and open
 it in any GBA emulator ([mGBA](https://mgba.io) is recommended) or on a flash
 cart. No building needed.
 
@@ -48,10 +48,10 @@ Python 3 is only needed if you change the artwork (`make assets`).
 4. Build and run:
 
    ```bash
-   git clone https://github.com/hjcoggan/zuma-gba.git ~/zuma-gba
-   cd ~/zuma-gba
+   git clone https://github.com/hjcoggan/zoomer-gba.git ~/zoomer-gba
+   cd ~/zoomer-gba
    make
-   open -a mGBA zuma-gba.gba
+   open -a mGBA zoomer-gba.gba
    ```
 
 ### Windows
@@ -65,14 +65,14 @@ Python 3 is only needed if you change the artwork (`make assets`).
    comes with devkitPro, with `make` and `git`) and build:
 
    ```bash
-   git clone https://github.com/hjcoggan/zuma-gba.git
-   cd zuma-gba
+   git clone https://github.com/hjcoggan/zoomer-gba.git
+   cd zoomer-gba
    make
    ```
 
    If `git` is missing, install it with `pacman -S git`.
 
-3. Install mGBA from <https://mgba.io/downloads.html> and open `zuma-gba.gba`
+3. Install mGBA from <https://mgba.io/downloads.html> and open `zoomer-gba.gba`
    with it (or drag the file onto the mGBA window).
 
 ### Linux
@@ -104,10 +104,10 @@ Python 3 is only needed if you change the artwork (`make assets`).
 4. Build and run:
 
    ```bash
-   git clone https://github.com/hjcoggan/zuma-gba.git
-   cd zuma-gba
+   git clone https://github.com/hjcoggan/zoomer-gba.git
+   cd zoomer-gba
    make
-   mgba-qt zuma-gba.gba
+   mgba-qt zoomer-gba.gba
    ```
 
 ### Tests

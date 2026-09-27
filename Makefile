@@ -1,6 +1,6 @@
-# Zuma GBA - build with devkitARM (devkitPro)
+# Zoomer GBA - build with devkitARM (devkitPro)
 
-TARGET  := zuma-gba
+TARGET  := zoomer-gba
 BUILD   := build
 SOURCES := $(wildcard source/*.c)
 OBJECTS := $(SOURCES:source/%.c=$(BUILD)/%.o)
@@ -20,7 +20,7 @@ all: $(TARGET).gba
 
 $(TARGET).gba: $(BUILD)/$(TARGET).elf
 	$(OBJCOPY) -O binary $< $@
-	$(GBAFIX) $@ -tZUMAGBA
+	$(GBAFIX) $@ -tZOOMERGBA
 
 $(BUILD)/$(TARGET).elf: $(OBJECTS)
 	$(CC) $(LDFLAGS) $^ -o $@

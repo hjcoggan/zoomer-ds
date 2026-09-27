@@ -1,7 +1,7 @@
 #include "save.h"
 
 #define SRAM ((volatile uint8_t *)0x0E000000)
-#define SAVE_MAGIC 0x414D555Au    // "ZUMA"
+#define SAVE_MAGIC 0x414D555Au    // "ZUMA" - the original name, kept so old saves still load
 #define SAVE_VERSION 1
 
 // Emulators and flash carts look for this string to pick the save type.

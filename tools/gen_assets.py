@@ -712,10 +712,15 @@ LOGO = {
     "U": ["##...##", "##...##", "##...##", "##...##", "##...##", "##...##", "#######", ".#####."],
     "M": ["##...##", "###.###", "#######", "##.#.##", "##...##", "##...##", "##...##", "##...##"],
     "A": ["..###..", ".#####.", "##...##", "##...##", "#######", "#######", "##...##", "##...##"],
+    "O": [".#####.", "##...##", "##...##", "##...##", "##...##", "##...##", "##...##", ".#####."],
+    "E": ["#######", "#######", "##.....", "######.", "######.", "##.....", "#######", "#######"],
+    "R": ["######.", "##...##", "##...##", "######.", "#####..", "##.##..", "##..##.", "##...##"],
 }
 
 
 def glyph_mask(text, cell, gap, glyphs):
+    """cell is the pixel size of one glyph cell: an int, or (width, height)."""
+    cw, ch_ = cell if isinstance(cell, tuple) else (cell, cell)
     cols = []
     for i, ch in enumerate(text):
         g = glyphs[ch]
@@ -723,14 +728,15 @@ def glyph_mask(text, cell, gap, glyphs):
             cols.append([g[gy][gx] == "#" for gy in range(len(g))])
         if i < len(text) - 1:
             cols += [[False] * len(g)] * gap
-    w = len(cols) * cell
-    h = len(cols[0]) * cell
-    return w, h, lambda x, y: 0 <= x < w and 0 <= y < h and cols[x // cell][y // cell]
+    w = len(cols) * cw
+    h = len(cols[0]) * ch_
+    return w, h, lambda x, y: 0 <= x < w and 0 <= y < h and cols[x // cw][y // ch_]
 
 
 def carved_text(cv, text, glyphs, cell, gap, top, face_top, face_bot, edge_lt, edge_dk, outline,
                 band=True):
     w, h, m = glyph_mask(text, cell, gap, glyphs)
+    cell_h = cell[1] if isinstance(cell, tuple) else cell
     x0 = (W - w) // 2
     # drop shadow
     for y in range(h):
@@ -756,9 +762,9 @@ def carved_text(cv, text, glyphs, cell, gap, top, face_top, face_bot, edge_lt, e
                 c = edge_lt
             elif not m(x + 1, y) or not m(x, y + 1) or not m(x + 2, y + 2):
                 c = edge_dk
-            elif band and cell * 3 <= y < cell * 3 + 2:
+            elif band and cell_h * 3 <= y < cell_h * 3 + 2:
                 c = scale(c, 0.7)       # carved stripe
-            elif band and y == cell * 3 + 2:
+            elif band and y == cell_h * 3 + 2:
                 c = scale(c, 1.15)
             cv.put(x0 + x, top + y, c)
 
@@ -807,7 +813,7 @@ def render_title():
 
     sun_stone(cv, 120, 40, 62, (176, 150, 112), dim=0.75)
 
-    carved_text(cv, "ZUMA", LOGO, 6, 1, 14,
+    carved_text(cv, "ZOOMER", LOGO, (4, 6), 1, 14,
                 face_top=(255, 222, 110), face_bot=(214, 120, 30),
                 edge_lt=(255, 248, 200), edge_dk=(120, 60, 10), outline=(40, 16, 6))
     carved_text(cv, "GBA", SMALL_GLYPHS, 2, 1, 67,
@@ -1208,7 +1214,10 @@ def sheet(name, imgs, cols, k=1):
 
 
 os.makedirs(os.path.join(ROOT, "build"), exist_ok=True)
-sheet("title", [render_preview(title_pal, title_idx, TITLE_FROG, [], 0, [(9, 15, "PRESS START")])], 1, 3)
+title_shot = render_preview(title_pal, title_idx, TITLE_FROG, [], 0, [(9, 15, "PRESS START")])
+sheet("title", [title_shot], 1, 3)
+write_png(os.path.join(ROOT, "build", "shot_title.png"),
+          [[title_shot[y // 3][x // 3] for x in range(W * 3)] for y in range(H * 3)])
 levels = []
 for lv in range(NL):
     li, ti = lv % NL, lv % NT

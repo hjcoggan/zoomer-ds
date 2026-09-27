@@ -291,7 +291,7 @@ static const struct { const char *role, *name; } credits[] = {
 };
 #define NUM_ROLES ((int)(sizeof(credits) / sizeof(credits[0])))
 #define CREDITS_LEAD 20           // blank rows so the list starts below the screen
-#define CREDITS_HEAD 4            // "ZUMA GBA", blank, "CREDITS", blank
+#define CREDITS_HEAD 4            // "ZOOMER GBA", blank, "CREDITS", blank
 #define CREDITS_END (CREDITS_LEAD + CREDITS_HEAD + NUM_ROLES * 3 + 3)
 
 // Write virtual credits row r into the (32-row, wrapping) text map.
@@ -299,7 +299,7 @@ static void credits_write_row(int r)
 {
     text_clear_row(r);
     int i = r - CREDITS_LEAD;
-    if (i == 0) text_center(r, "ZUMA GBA", TXT_GOLD);
+    if (i == 0) text_center(r, "ZOOMER GBA", TXT_GOLD);
     if (i == 2) text_center(r, "CREDITS", TXT_PLAIN);
     i -= CREDITS_HEAD;
     if (i < 0) return;
