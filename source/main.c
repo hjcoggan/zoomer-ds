@@ -492,8 +492,9 @@ static void update_settings(void)
         if (settings_from == ST_PAUSE) {
             state = ST_PAUSE;
             menu_sel = 2;
-            draw_pause_menu();
+            text_clear(TOP);                    // wipe the controls help
             draw_dashboard_text();
+            draw_pause_menu();
             dim(TOP, PAUSE_DIM);
         } else {
             state = ST_TITLE;
