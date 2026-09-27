@@ -1,172 +1,181 @@
-#include "gba.h"
+// Zoomer DS: the track on the touch screen, the dashboard on the top screen.
+#include <nds.h>
+#include <math.h>
 #include "assets.h"
 #include "chain.h"
+#include "gfx.h"
+#include "scene.h"
 #include "sound.h"
 #include "save.h"
-#include "ui.h"
 
-#define MAP_SBB 31
-#define SHOT_SPEED 5
-#define FINE_TURN 256             // 8.8 fixed, 256 units per full turn
-#define FAST_TURN 1024
-#define ROLL_IN_SPEED (3 << 7)    // fast roll-in at level start
-#define PAUSE_DIM 9               // 0-16 brightness decrease behind menus
+#define FINE_TURN 128             // aim speeds, 32768 a turn
+#define FAST_TURN 512
+#define SHOT_SPEED (7 << 8)       // 8.8 px/frame
+#define ROLL_IN_SPEED 576         // fast roll-in at the start and in endless when short
+#define REVERSE_SPEED (-640)
+#define SLOW_FRAMES (6 * 60)
+#define REVERSE_FRAMES (3 * 60)
+#define MOUTH 15                  // mouth and back socket distance from the frog's centre
+#define SOCKET 13
+#define PAUSE_DIM 10
 #define ENDLESS_LAYOUT 0          // endless always uses the same track
 
-// OAM slots
-#define OBJ_MOUTH 0
-#define OBJ_NEXT  1
-#define OBJ_FROG  2
-#define OBJ_SHOT  3
-#define OBJ_CHAIN 4
+#define TOUCH_TURN_MIN 40        // touch aiming: the frog turns towards the stylus
+#define TOUCH_TURN_MAX 300        // at a limited speed, so aim takes a moment
+#define GUIDE_TOUCH_DOTS 12       // the guide only shows the direction, not the target
+
+// top screen sprites
+#define SPR_NOW 0
+#define SPR_NEXT 1
+#define SOCKET_Y 160              // ball sockets on the dashboard (see tools/gen_assets.py)
+#define NOW_X 36
+#define NEXT_X 92
 
 typedef enum {
-    ST_TITLE, ST_MENU, ST_SETTINGS, ST_CREDITS,
-    ST_PLAY, ST_PAUSE, ST_CLEAR, ST_OVER,
+    ST_TITLE, ST_SETTINGS, ST_CREDITS,
+    ST_PLAY, ST_PAUSE, ST_CLEAR, ST_DRAIN, ST_OVER,
 } State;
 typedef enum { MODE_ADVENTURE, MODE_ENDLESS } Mode;
 
-enum { MAIN_ADVENTURE, MAIN_ENDLESS, MAIN_SETTINGS, MAIN_CREDITS, MAIN_COUNT };
-enum { PAUSE_RESUME, PAUSE_RESTART, PAUSE_SETTINGS, PAUSE_QUIT, PAUSE_COUNT };
-enum { SET_AIM, SET_BUTTONS, SET_BACK, SET_COUNT };
-
-static uint16_t oam[128 * 4];
 static Chain chain;
 static const Layout *layout;
-static State state, settings_return;
+static State state, settings_from;
 static Mode mode;
-static int level, score, level_score, best_at_start, timer, frames, play_frames;
-static int menu_sel, rolling_in;
-static int credits_scroll, credits_rows;
-static int32_t angle;             // 8.8, 0 = up, clockwise
+static int level, theme, score, level_score, best_at_start, total_balls;
+static int frames, play_frames, timer, menu_sel, rolling_in, streak;
+static int aim, touch_target, blink, shake_timer;
+static int slow_timer, reverse_timer;
 static int cur_color, next_color;
 static int shot_active, shot_color;
 static int32_t shot_x, shot_y, shot_vx, shot_vy;
+static int trail_x[4], trail_y[4];
+static int credits_scroll, credits_rows;
+static char msg1[20], msg2[24];
+static int msg_timer;
 static uint32_t rng = 0xC0FFEE;
-static uint16_t keys, prev_keys;
 
-static int isin(int a) { return sin_tab[a & 255]; }
-static int icos(int a) { return sin_tab[(a + 64) & 255]; }
+// input for this frame
+static uint32_t pressed, held;
+static int touching, tapped, released, tx, ty;
+static int aiming_by_touch;
 
-static int on_title_screen(void)
+static int isin(int a) { return sinLerp(a); }      // 4.12
+static int icos(int a) { return cosLerp(a); }
+
+// ---------------------------------------------------------------- input
+
+#ifdef AUTOTEST
+// Debug builds only: a scripted run through every menu and mode.
+// Each step: at frame `at`, hold `keys` for `len` frames (KEY_TOUCH touches x, y).
+typedef struct { int at; uint32_t keys; int len, x, y; } Step;
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"   // x, y only matter for touches
+static const Step script[] = {
+    { 120, KEY_DOWN, 1 }, { 130, KEY_DOWN, 1 }, { 140, KEY_A, 1 },          // settings
+    { 190, KEY_A, 1 }, { 200, KEY_DOWN, 1 }, { 210, KEY_A, 1 },              // toggle aim, buttons
+    { 220, KEY_DOWN, 1 }, { 230, KEY_A, 1 }, { 240, KEY_A, 1 },              // guide off and on
+    { 260, KEY_TOUCH, 2, 128, 148 },                                         // tap BACK
+    { 320, KEY_DOWN, 1 }, { 330, KEY_A, 1 },                                 // credits
+    { 700, KEY_TOUCH, 2, 128, 160 },                                         // tap BACK
+    { 760, KEY_TOUCH, 2, 128, 52 },                                          // tap ADVENTURE
+    { 900, KEY_TOUCH, 70, 210, 30 },                                         // drag to aim, release to fire
+    { 1000, KEY_TOUCH, 70, 30, 170 },
+    { 1100, KEY_TOUCH, 2, 128, 96 },                                         // tap the frog: swap
+    { 1150, KEY_R, 40 }, { 1200, KEY_LEFT, 20 }, { 1230, KEY_A, 1 }, { 1260, KEY_B, 1 },
+    { 1300, KEY_START, 1 }, { 1330, KEY_DOWN, 1 }, { 1340, KEY_DOWN, 1 }, { 1350, KEY_A, 1 },  // pause, settings
+    { 1400, KEY_B, 1 }, { 1430, KEY_UP, 1 }, { 1440, KEY_UP, 1 }, { 1450, KEY_A, 1 },          // back, resume
+    { 1520, KEY_START, 1 }, { 1540, KEY_DOWN, 1 }, { 1550, KEY_A, 1 },                          // restart
+    { 1700, KEY_START, 1 }, { 1720, KEY_DOWN, 1 }, { 1730, KEY_DOWN, 1 }, { 1740, KEY_DOWN, 1 },
+    { 1750, KEY_A, 1 },                                                                         // quit
+    { 1850, KEY_TOUCH, 2, 128, 84 },                                         // tap ENDLESS; then wait to lose
+    { 100000, 0, 0 },
+};
+#endif
+
+static void read_input(void)
 {
-    return state == ST_TITLE || state == ST_MENU || state == ST_CREDITS ||
-           (state == ST_SETTINGS && settings_return == ST_MENU);
-}
-
-// ---------------------------------------------------------------- video
-
-static void load_bg(const uint16_t *pal, const uint32_t *tiles)
-{
-    PAL_BG[0] = pal[0];
-    for (int i = BG_FIRST_COLOR; i < 256; i++) PAL_BG[i] = pal[i];
-    volatile uint32_t *d = CHARBLOCK(0);
-    for (int i = 0; i < BG_IMG_WORDS; i++) d[i] = tiles[i];
-}
-
-static void init_video(void)
-{
-    REG_DISPCNT = 0x0080;         // forced blank while loading
-    REG_BLDCNT = BLD_DARKEN | BLD_BG0 | BLD_BG1 | BLD_OBJ | BLD_BD;
-    REG_BLDY = 16;                // start black, screens fade in
-
-    for (int i = 0; i < 16; i++) PAL_BG[16 + i] = font_pal[i];
-    for (int i = 0; i < (int)(sizeof(obj_pal) / 2); i++) PAL_OBJ[i] = obj_pal[i];
-
-    volatile uint32_t *d = CHARBLOCK(FONT_CBB);
-    for (int i = 0; i < (int)(sizeof(font_tiles) / 4); i++) d[i] = font_tiles[i];
-    for (int i = 0; i < (int)(sizeof(obj_tiles) / 4); i++) OBJ_TILES[i] = obj_tiles[i];
-
-    volatile uint16_t *map = SCREENBLOCK(MAP_SBB);
-    for (int y = 0; y < 32; y++)
-        for (int x = 0; x < 32; x++)
-            map[y * 32 + x] = (x < 30 && y < 20) ? y * 30 + x : 0;
-    text_clear();
-
-    REG_BG0CNT = BG_PRIO(3) | BG_CBB(0) | BG_SBB(MAP_SBB) | BG_8BPP;
-    REG_BG1CNT = BG_PRIO(0) | BG_CBB(FONT_CBB) | BG_SBB(TEXT_SBB);
-
-    for (int i = 0; i < 128; i++) oam[i * 4] = ATTR0_HIDE;
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_OBJ | DCNT_OBJ_1D;
-}
-
-static void dim_game(int on)
-{
-    REG_BLDCNT = on ? (BLD_DARKEN | BLD_BG0 | BLD_OBJ) : 0;
-    REG_BLDY = PAUSE_DIM;
-}
-
-static void set_obj(int n, int x, int y, uint16_t a0, uint16_t a1, uint16_t a2)
-{
-    oam[n * 4 + 0] = (y & 255) | a0;
-    oam[n * 4 + 1] = (x & 511) | a1;
-    oam[n * 4 + 2] = a2;
-}
-
-static void hide_obj(int n) { oam[n * 4] = ATTR0_HIDE; }
-
-static void ball_obj(int n, int x, int y, int color)
-{
-    if (x < -8 || x > 244 || y < -8 || y > 164) {
-        hide_obj(n);
-        return;
+    scanKeys();
+    pressed = keysDown();
+    held = keysHeld();
+    uint32_t up = keysUp();
+#ifdef AUTOTEST
+    {
+        static uint32_t prev;
+        uint32_t now = 0;
+        for (const Step *st = script; st->keys || st->at < 100000; st++) {
+            if (frames >= st->at && frames < st->at + st->len) {
+                now |= st->keys;
+                if (st->keys & KEY_TOUCH) {
+                    tx = st->x;
+                    ty = st->y;
+                }
+            }
+            if (st->at >= 100000) break;
+        }
+        // once in endless and lost, press A on the game over screen now and then
+        if (state == ST_OVER && frames % 120 == 0) now |= KEY_A;
+        held = now;
+        pressed = now & ~prev;
+        up = prev & ~now;
+        prev = now;
     }
-    set_obj(n, x - 4, y - 4, 0, ATTR1_SIZE8, 0 | ATTR2_PRIO(1) | ATTR2_PAL(color));
+#endif
+    touching = (held & KEY_TOUCH) != 0;
+    tapped = (pressed & KEY_TOUCH) != 0;
+    released = (up & KEY_TOUCH) != 0;
+#ifndef AUTOTEST
+    if (touching) {
+        touchPosition tp;
+        touchRead(&tp);
+        tx = tp.px;
+        ty = tp.py;
+    }
+#endif
+    rand_next(&rng);
+    rng += held + tx * 7 + ty;
 }
 
-static void draw_objects(void)
+static int tapped_in(int x, int y, int w, int h)    // pixels
 {
-    for (int i = 0; i < 128; i++) hide_obj(i);
-    if (state == ST_CREDITS) return;
-
-    int a = angle >> 8;
-    int s = isin(a) >> 4, c = icos(a) >> 4;   // 8.8
-    int title = on_title_screen();
-    int fx = title ? TITLE_FROG_X : layout->frog_x;
-    int fy = title ? TITLE_FROG_Y : layout->frog_y;
-
-    // frog, affine sprite 0
-    set_obj(OBJ_FROG, fx - 16, fy - 16, ATTR0_AFFINE, ATTR1_SIZE32 | (0 << 9),
-            FROG_TILE | ATTR2_PRIO(1) | ATTR2_PAL(FROG_PALBANK));
-    oam[0 * 4 + 3] = c;
-    oam[1 * 4 + 3] = s;
-    oam[2 * 4 + 3] = -s;
-    oam[3 * 4 + 3] = c;
-    if (title) return;
-
-    if (state != ST_OVER) {
-        ball_obj(OBJ_MOUTH, fx + (s * 10 >> 8), fy - (c * 10 >> 8), cur_color);
-        ball_obj(OBJ_NEXT, fx - (s * 9 >> 8), fy + (c * 9 >> 8), next_color);
-    }
-    if (shot_active) ball_obj(OBJ_SHOT, shot_x >> 8, shot_y >> 8, shot_color);
-
-    int n = OBJ_CHAIN;
-    int32_t hidden = layout->hide << 8;   // still inside the serpent's mouth
-    for (int i = chain.count - 1; i >= 0 && n < 128; i--) {
-        if (chain.pos[i] < hidden) break;
-        int x, y;
-        chain_point(chain.pos[i], &x, &y);
-        ball_obj(n++, x, y, chain.color[i]);
-    }
+    return tapped && tx >= x && tx < x + w && ty >= y && ty < y + h;
 }
 
-static void frame(void)
+// ---------------------------------------------------------------- touch buttons
+
+typedef struct {
+    int y, w, h;            // tiles; buttons are centred across the touch screen
+    const char *label;
+} Button;
+
+static void draw_buttons(const Button *b, int n, int sel)
 {
-    draw_objects();
-    vsync();
-    for (int i = 0; i < 128 * 4; i++) OAM[i] = oam[i];
-    sound_update();
-    frames++;
+    for (int i = 0; i < n; i++) button(BOT, b[i].y, b[i].w, b[i].h, b[i].label, i == sel ? TXT_HILITE : TXT_PANEL);
 }
 
-static void fade(int to_black)
+static int button_tapped(const Button *b)
 {
-    REG_BLDCNT = BLD_DARKEN | BLD_BG0 | BLD_BG1 | BLD_OBJ | BLD_BD;
-    for (int i = 0; i <= 16; i += 2) {
-        REG_BLDY = to_black ? i : 16 - i;
-        frame();
+    return tapped_in(button_left(b->w, b->label), b->y * 8, button_px_width(b->w, b->label), b->h * 8);
+}
+
+// The button tapped this frame, or chosen with the d-pad and A/Start. -1 if none.
+static int buttons_update(const Button *b, int n, int *sel)
+{
+    for (int i = 0; i < n; i++)
+        if (button_tapped(&b[i])) {
+            *sel = i;
+            draw_buttons(b, n, *sel);
+            return i;
+        }
+    if (n > 1 && (pressed & KEY_UP)) {
+        *sel = (*sel + n - 1) % n;
+        sfx_move();
+        draw_buttons(b, n, *sel);
     }
-    if (!to_black) REG_BLDCNT = 0;
+    if (n > 1 && (pressed & KEY_DOWN)) {
+        *sel = (*sel + 1) % n;
+        sfx_move();
+        draw_buttons(b, n, *sel);
+    }
+    return (pressed & (KEY_A | KEY_START)) ? *sel : -1;
 }
 
 // ---------------------------------------------------------------- saving
@@ -190,85 +199,323 @@ static void record_scores(void)
     if (changed) save_write();
 }
 
-// ---------------------------------------------------------------- title and menus
+// ---------------------------------------------------------------- dashboard (top screen)
 
-static const char *const main_items[MAIN_COUNT] = { "ADVENTURE", "ENDLESS", "SETTINGS", "CREDITS" };
-static const char *const pause_items[PAUSE_COUNT] = { "RESUME", "RESTART", "SETTINGS", "QUIT" };
-
-static void draw_title_text(void)
+static void message(const char *a, const char *b, int frames_)
 {
-    text_clear();
-    if (save.best_score > 0 || save.best_endless > 0) {
-        char buf[32] = "BEST ";
-        format_num(buf + 5, save.best_score, 6);
-        const char *e = "  ENDLESS ";
-        int k = 11;
-        while (*e) buf[k++] = *e++;
-        format_num(buf + k, save.best_endless, 6);
-        text_center(17, buf, TXT_GOLD);
+    put_str(msg1, a);
+    put_str(msg2, b);
+    msg_timer = frames_;
+}
+
+static void draw_dashboard_text(void)
+{
+    char buf[40], *p;
+    text_clear_rows(TOP, 2, 3);
+    p = buf;
+    if (mode == MODE_ADVENTURE) {
+        p = put_str(p, "LEVEL ");
+        p = put_num0(p, level, 2);
+    } else {
+        p = put_str(p, "ENDLESS");
+    }
+    p = put_str(p, " - ");
+    put_str(p, layout->name);
+    text_style(TOP, 2, 2, buf, TXT_GOLD);
+
+    text_style(TOP, 2, 4, "SCORE", TXT_TEAL);
+    big_number(TOP, 2, 5, score, 7);
+    if (mode == MODE_ADVENTURE) {            // right-aligned with the panel's other numbers
+        int left = chain.to_spawn + chain.count;
+        text_style(TOP, 20, 4, "BALLS LEFT", TXT_TEAL);
+        big_number(TOP, 24, 5, left > 999 ? 999 : left, 3);
+    } else {
+        text_style(TOP, 25, 4, "SPEED", TXT_TEAL);
+        big_number(TOP, 26, 5, 1 + play_frames / (60 * 15), 2);
+    }
+    text_style(TOP, 2, 8, "BEST", TXT_TEAL);
+    text_num0(TOP, 7, 8, mode == MODE_ADVENTURE ? save.best_score : save.best_endless, 7, TXT_PLAIN);
+
+    if (mode == MODE_ADVENTURE) {
+        text_style(TOP, 2, 11, "PROGRESS", TXT_TEAL);
+        // balls gone = the level's balls, less those still to come and those on the track
+        int gone = total_balls - chain.to_spawn - chain.count;
+        if (gone < 0) gone = 0;
+        int pct = total_balls ? gone * 100 / total_balls : 0;
+        text_num(TOP, 25, 11, pct, 3, TXT_PLAIN);
+        text_style(TOP, 28, 11, "%", TXT_PLAIN);
+        progress_bar(TOP, 2, 12, 28, gone, total_balls, chain.to_spawn == 0 ? BAR_GOLD : BAR_TEAL);
+    } else {
+        int secs = play_frames / 60;
+        text_style(TOP, 2, 11, "TIME", TXT_TEAL);
+        text_num0(TOP, 24, 11, secs / 60, 2, TXT_PLAIN);
+        text_style(TOP, 26, 11, ":", TXT_PLAIN);
+        text_num0(TOP, 27, 11, secs % 60, 2, TXT_PLAIN);
+        progress_bar(TOP, 2, 12, 28, secs % 15, 15, BAR_TEAL);   // next speed-up
+    }
+
+    int danger = chain_danger(&chain);
+    text_style(TOP, 2, 15, "DANGER", TXT_TEAL);
+    const char *word = danger > 200 ? "HURRY!" : danger > 140 ? " CLOSE" : "  SAFE";
+    text_style(TOP, 24, 15, danger > 200 && (frames & 16) ? "      " : word, danger > 140 ? TXT_GOLD : TXT_PLAIN);
+    progress_bar(TOP, 2, 16, 28, danger, 256, BAR_RED);
+
+    text_clear_rows(TOP, 19, 23);
+    text_style(TOP, 3, 22, "NOW", TXT_TEAL);
+    text_style(TOP, 10, 22, "NEXT", TXT_TEAL);
+    if (msg_timer > 0) {
+        text_center_in(TOP, 15, 16, 19, msg1, TXT_GOLD);
+        text_center_in(TOP, 15, 16, 20, msg2, TXT_PLAIN);
+    }
+    // power-ups in effect
+    p = buf;
+    *p = 0;
+    if (slow_timer > 0) {
+        p = put_str(p, "SLOW ");
+        p = put_num(p, (slow_timer + 59) / 60);
+    }
+    if (reverse_timer > 0) {
+        if (p != buf) p = put_str(p, " ");
+        p = put_str(p, "BACK ");
+        p = put_num(p, (reverse_timer + 59) / 60);
+    }
+    text_center_in(TOP, 15, 16, 22, buf, TXT_GOLD);
+}
+
+static void dashboard_sprites(void)
+{
+    if (state == ST_PLAY || state == ST_PAUSE || state == ST_CLEAR) {
+        spr(SPR_NOW, NOW_X - 16, SOCKET_Y - 16, SpriteSize_32x32, SUB_TILE_BALL, cur_color, 2);
+        spr(SPR_NEXT, NEXT_X - 16, SOCKET_Y - 16, SpriteSize_32x32, SUB_TILE_BALL, next_color, 2);
     }
 }
 
-static void draw_main_menu(void)
+// ---------------------------------------------------------------- the playfield (3D)
+
+static int ball_frame(int32_t pos) { return (int)(pos * BALL_FRAMES / (BALL_ROLL_PX << 8)); }
+
+static void draw_chain(void)
 {
-    menu_draw(10, 14, 0, main_items, MAIN_COUNT, menu_sel);
+    int32_t hidden = layout->hide << 8;
+    for (int i = 0; i < chain.count; i++) {
+        if (chain.pos[i] < hidden) continue;
+        int x, y;
+        chain_point(chain.pos[i], &x, &y);
+        draw_ball(x, y, chain.color[i], ball_frame(chain.pos[i]), chain_angle(chain.pos[i]),
+                  chain.power[i], 4096);
+    }
 }
 
-static void draw_pause_menu(void)
+static void draw_guide(void)
 {
-    menu_draw(5, 14, "PAUSED", pause_items, PAUSE_COUNT, menu_sel);
+    if (!save.guide || shot_active || state != ST_PLAY) return;
+    int dx = isin(aim), dy = -icos(aim);
+    int32_t x = (layout->frog_x << 8) + dx * MOUTH / 16, y = (layout->frog_y << 8) + dy * MOUTH / 16;
+    int strong = aiming_by_touch && touching;
+    for (int i = 0; i < GUIDE_TOUCH_DOTS; i++) {
+        x += dx * 6 / 16;
+        y += dy * 6 / 16;
+        int px = x >> 8, py = y >> 8;
+        if (px < 0 || px > 255 || py < 0 || py > 191) break;
+        if (chain_hit(&chain, px, py) >= 0) break;
+        if (i < 2) continue;
+        int a = (strong ? 22 : 14) - i * (strong ? 18 : 12) / GUIDE_TOUCH_DOTS;
+        draw_dot(px, py, ball_rgb[cur_color], a);
+    }
 }
 
-static void draw_settings(void)
+static void draw_play(void)
 {
-    const char *items[SET_COUNT];
-    items[SET_AIM] = save.dpad_fast ? "AIM   DPAD FAST" : "AIM   DPAD FINE";
-    items[SET_BUTTONS] = save.swap_buttons ? "SHOOT B  SWAP A" : "SHOOT A  SWAP B";
-    items[SET_BACK] = "BACK";
-    int h = menu_draw(5, 20, "SETTINGS", items, SET_COUNT, menu_sel);
-    text_center(5 + h + 1, save.dpad_fast ? "L R TO FINE TUNE" : "L R TO SPIN FAST", TXT_GOLD);
+    int fx = layout->frog_x, fy = layout->frog_y;
+    draw_chain();
+    draw_guide();
+    draw_frog(fx, fy, aim, blink > 0);
+    if (state != ST_DRAIN && state != ST_OVER) {
+        int dx = isin(aim), dy = -icos(aim);
+        draw_ball(fx + dx * MOUTH / 4096, fy + dy * MOUTH / 4096, cur_color, 0, aim + 8192, 0, 4096);
+        draw_ball(fx - dx * SOCKET / 4096, fy - dy * SOCKET / 4096, next_color, 0, aim + 8192, 0, 2900);
+    }
+    if (shot_active) {
+        int angle = aim + 8192;
+        for (int i = 3; i >= 1; i--)
+            draw_dot(trail_x[i], trail_y[i], ball_rgb[shot_color], 14 - i * 4);
+        draw_ball(shot_x >> 8, shot_y >> 8, shot_color, frames / 2, angle, 0, 4096);
+    }
+}
+
+// Title parade: two rows of balls rolling along the top and bottom borders.
+static void draw_parade(void)
+{
+    for (int row = 0; row < 2; row++) {
+        int y = row ? 170 : 22;
+        int dir = row ? -1 : 1;
+        int off = (frames * 3 / 2) % 14;
+        for (int i = -1; i < 20; i++) {
+            int x = row ? 256 - (i * 14 + off) : i * 14 + off;
+            int col = ((i - frames * 3 / 2 / 14 * dir) % 5 + 5) % 5;
+            draw_ball(x, y, (col * 3 + row) % NUM_COLORS, (x * BALL_FRAMES / BALL_ROLL_PX) * dir,
+                      row ? 16384 : 0, 0, 4096);
+        }
+    }
+}
+
+static void render(void)
+{
+    int shx = 0, shy = 0;
+    if (shake_timer > 0) {
+        shx = (int)(rand_next(&rng) % 7) - 3;
+        shy = (int)(rand_next(&rng) % 7) - 3;
+    }
+    shake(-shx, -shy);
+    scene_begin(shx, shy);
+    if (state == ST_TITLE || (state == ST_SETTINGS && settings_from == ST_TITLE) || state == ST_CREDITS)
+        draw_parade();
+    else
+        draw_play();
+    fx_draw();
+    scene_end();
+
+    spr_hide_all();
+    if (state >= ST_PLAY) dashboard_sprites();
+}
+
+static void frame(void)
+{
+    render();
+    gfx_frame();
+    sound_update();
+    fx_update();
+    frames++;
+    if (shake_timer > 0) shake_timer--;
+    if (blink > 0) blink--;
+    else if (rand_next(&rng) % 200 == 0) blink = 8;
+}
+
+// ---------------------------------------------------------------- screens
+
+static const Button title_buttons[] = {
+    { 5, 16, 3, "ADVENTURE" }, { 9, 16, 3, "ENDLESS" }, { 13, 16, 3, "SETTINGS" }, { 17, 16, 3, "CREDITS" },
+};
+enum { MAIN_ADVENTURE, MAIN_ENDLESS, MAIN_SETTINGS, MAIN_CREDITS, MAIN_COUNT };
+
+static void draw_title_text(void)
+{
+    char buf[40], *p;
+    text_clear(TOP);
+    text_scroll(TOP, 0);
+    if (save.best_score > 0 || save.best_endless > 0) {
+        p = put_str(buf, "BEST ");
+        p = put_num0(p, save.best_score, 7);
+        p = put_str(p, "  LEVEL ");
+        put_num0(p, save.best_level, 2);
+        text_center(TOP, 17, buf, TXT_GOLD);
+        p = put_str(buf, "ENDLESS ");
+        put_num0(p, save.best_endless, 7);
+        text_center(TOP, 19, buf, TXT_GOLD);
+    } else {
+        text_center(TOP, 18, "TOUCH A BUTTON TO PLAY", TXT_GOLD);
+    }
+    if (!save_available) text_center(TOP, 20, "NO SD CARD - SCORES WON'T SAVE", TXT_PLAIN);
+    text_clear(BOT);
+    draw_buttons(title_buttons, MAIN_COUNT, menu_sel);
 }
 
 static void go_title(void)
 {
     fade(1);
     music_stop();
-    REG_BG1VOFS = 0;
-    load_bg(title_pal, title_tiles);
-    chain.count = 0;
-    shot_active = 0;
-    angle = 0;
-    draw_title_text();
+    dim(BOT, 0);
+    dim(TOP, 0);
+    gfx_picture(TOP, title_top_pic);
+    gfx_picture(BOT, title_bottom_pic);
+    fx_clear();
+    shake_timer = 0;
     state = ST_TITLE;
+    menu_sel = MAIN_ADVENTURE;
+    draw_title_text();
     fade(0);
     music_play(0);
 }
 
-static int menu_move(uint16_t pressed, int n)
+// ---- settings
+
+enum { SET_AIM, SET_BUTTONS, SET_GUIDE, SET_BACK, SET_COUNT };
+
+static void settings_buttons(Button *b)
 {
-    if (pressed & KEY_UP) {
-        menu_sel = (menu_sel + n - 1) % n;
-        sfx_swap();
-        return 1;
-    }
-    if (pressed & KEY_DOWN) {
-        menu_sel = (menu_sel + 1) % n;
-        sfx_swap();
-        return 1;
-    }
-    return 0;
+    b[SET_AIM] = (Button){ 4, 22, 3, save.dpad_fast ? "AIM   DPAD FAST" : "AIM   DPAD FINE" };
+    b[SET_BUTTONS] = (Button){ 8, 22, 3, save.swap_buttons ? "SHOOT  B BUTTON" : "SHOOT  A BUTTON" };
+    b[SET_GUIDE] = (Button){ 12, 22, 3, save.guide ? "AIM GUIDE  ON" : "AIM GUIDE  OFF" };
+    b[SET_BACK] = (Button){ 17, 12, 3, "BACK" };
 }
 
-static void open_settings(State back)
+static void draw_controls_help(void)
 {
-    settings_return = back;
+    text_clear(TOP);
+    panel(TOP, 3, 6, 26, 16);
+    text_center(TOP, 7, "CONTROLS", TXT_HILITE);
+    text_style(TOP, 5, 9, "STYLUS  HOLD TO AIM", TXT_PANEL);
+    text_style(TOP, 5, 10, "        LIFT TO SHOOT", TXT_PANEL);
+    text_style(TOP, 5, 11, "        TAP FROG: SWAP", TXT_PANEL);
+    text_style(TOP, 5, 13, save.dpad_fast ? "DPAD    SPIN FAST" : "DPAD    AIM FINE", TXT_PANEL);
+    text_style(TOP, 5, 14, save.dpad_fast ? "L  R    AIM FINE" : "L  R    SPIN FAST", TXT_PANEL);
+    text_style(TOP, 5, 15, save.swap_buttons ? "B       SHOOT" : "A       SHOOT", TXT_PANEL);
+    text_style(TOP, 5, 16, save.swap_buttons ? "A       SWAP BALLS" : "B       SWAP BALLS", TXT_PANEL);
+    text_style(TOP, 5, 17, "START   PAUSE", TXT_PANEL);
+    text_center(TOP, 19, "POWER BALLS: SLOW,", TXT_DIM);
+    text_center(TOP, 20, "REVERSE AND BOMB", TXT_DIM);
+}
+
+static void open_settings(State from)
+{
+    Button b[SET_COUNT];
+    settings_from = from;
     state = ST_SETTINGS;
     menu_sel = SET_AIM;
-    text_clear();
-    draw_settings();
+    text_clear(BOT);
+    settings_buttons(b);
+    draw_buttons(b, SET_COUNT, menu_sel);
+    draw_controls_help();
+    dim(TOP, 8);
 }
 
-// ---------------------------------------------------------------- credits
+static void draw_pause_menu(void);
+
+static void update_settings(void)
+{
+    Button b[SET_COUNT];
+    settings_buttons(b);
+    int pick = buttons_update(b, SET_COUNT, &menu_sel);
+    if ((pressed & KEY_B) || pick == SET_BACK) {
+        sfx_select();
+        dim(TOP, 0);
+        if (settings_from == ST_PAUSE) {
+            state = ST_PAUSE;
+            menu_sel = 2;
+            draw_pause_menu();
+            draw_dashboard_text();
+            dim(TOP, PAUSE_DIM);
+        } else {
+            state = ST_TITLE;
+            menu_sel = MAIN_SETTINGS;
+            draw_title_text();
+        }
+        return;
+    }
+    if (pick < 0 && !(pressed & (KEY_LEFT | KEY_RIGHT))) return;
+    if (pick < 0) pick = menu_sel;
+    if (pick == SET_AIM) save.dpad_fast ^= 1;
+    if (pick == SET_BUTTONS) save.swap_buttons ^= 1;
+    if (pick == SET_GUIDE) save.guide ^= 1;
+    save_write();
+    sfx_select();
+    text_clear(BOT);
+    settings_buttons(b);
+    draw_buttons(b, SET_COUNT, menu_sel);
+    draw_controls_help();
+}
+
+// ---- credits
 
 static const struct { const char *role, *name; } credits[] = {
     { "GAME DIRECTOR", "HEATH" }, { "CREATIVE DIRECTOR", "CLAUDE" },
@@ -276,77 +523,76 @@ static const struct { const char *role, *name; } credits[] = {
     { "LEAD GAME DESIGNER", "CLAUDE" }, { "LEVEL DESIGNER", "CLAUDE" },
     { "SYSTEMS DESIGNER", "CLAUDE" }, { "NARRATIVE DESIGNER", "CLAUDE" },
     { "LEAD PROGRAMMER", "CLAUDE" }, { "GAMEPLAY PROGRAMMER", "CLAUDE" },
-    { "ENGINE PROGRAMMER", "CLAUDE" }, { "GRAPHICS PROGRAMMER", "CLAUDE" },
+    { "ENGINE PROGRAMMER", "CLAUDE" }, { "3D PROGRAMMER", "CLAUDE" },
     { "AUDIO PROGRAMMER", "CLAUDE" }, { "TOOLS PROGRAMMER", "CLAUDE" },
-    { "UI PROGRAMMER", "CLAUDE" }, { "BUILD ENGINEER", "CLAUDE" },
-    { "ART DIRECTOR", "CLAUDE" }, { "LEAD ARTIST", "CLAUDE" },
-    { "PIXEL ARTIST", "CLAUDE" }, { "ENVIRONMENT ARTIST", "CLAUDE" },
-    { "CHARACTER ARTIST", "CLAUDE" }, { "ANIMATOR", "CLAUDE" },
+    { "UI PROGRAMMER", "CLAUDE" }, { "PORTING ENGINEER", "CLAUDE" },
+    { "BUILD ENGINEER", "CLAUDE" }, { "ART DIRECTOR", "CLAUDE" },
+    { "LEAD ARTIST", "CLAUDE" }, { "PIXEL ARTIST", "CLAUDE" },
+    { "ENVIRONMENT ARTIST", "CLAUDE" }, { "CHARACTER ARTIST", "CLAUDE" },
+    { "VFX ARTIST", "CLAUDE" }, { "ANIMATOR", "CLAUDE" },
     { "UI ARTIST", "CLAUDE" }, { "COMPOSER", "CLAUDE" },
     { "SOUND DESIGNER", "CLAUDE" }, { "QA LEAD", "CLAUDE" },
     { "QA TESTER", "HEATH" }, { "BALANCE TESTER", "HEATH" },
     { "LOCALIZATION", "CLAUDE" }, { "MARKETING", "CLAUDE" },
     { "COMMUNITY MANAGER", "CLAUDE" }, { "FROG WRANGLER", "CLAUDE" },
-    { "BALL POLISHER", "CLAUDE" },
+    { "BALL POLISHER", "CLAUDE" }, { "STYLUS TESTER", "CLAUDE" },
 };
 #define NUM_ROLES ((int)(sizeof(credits) / sizeof(credits[0])))
-#define CREDITS_LEAD 20           // blank rows so the list starts below the screen
-#define CREDITS_HEAD 4            // "ZOOMER GBA", blank, "CREDITS", blank
+#define CREDITS_LEAD 24           // blank rows so the list starts below the screen
+#define CREDITS_HEAD 4            // "ZOOMER DS", blank, "CREDITS", blank
 #define CREDITS_END (CREDITS_LEAD + CREDITS_HEAD + NUM_ROLES * 3 + 3)
 
-// Write virtual credits row r into the (32-row, wrapping) text map.
+static const Button back_button = { 18, 12, 3, "BACK" };
+
+// Write virtual credits row r into the (32-row, wrapping) top text map.
 static void credits_write_row(int r)
 {
-    text_clear_row(r);
+    text_clear_rows(TOP, r & 31, (r & 31) + 1);
     int i = r - CREDITS_LEAD;
-    if (i == 0) text_center(r, "ZOOMER GBA", TXT_GOLD);
-    if (i == 2) text_center(r, "CREDITS", TXT_PLAIN);
+    if (i == 0) text_center(TOP, r, "ZOOMER DS", TXT_GOLD);
+    if (i == 2) text_center(TOP, r, "CREDITS", TXT_PLAIN);
     i -= CREDITS_HEAD;
     if (i < 0) return;
     int role = i / 3;
     if (role < NUM_ROLES) {
-        if (i % 3 == 0) text_center(r, credits[role].role, TXT_PLAIN);
-        if (i % 3 == 1) text_center(r, credits[role].name, TXT_GOLD);
+        if (i % 3 == 0) text_center(TOP, r, credits[role].role, TXT_PLAIN);
+        if (i % 3 == 1) text_center(TOP, r, credits[role].name, TXT_GOLD);
     } else if (r == CREDITS_END) {
-        text_center(r, "THANKS FOR PLAYING!", TXT_GOLD);
+        text_center(TOP, r, "THANKS FOR PLAYING!", TXT_GOLD);
     }
 }
 
 static void start_credits(void)
 {
     state = ST_CREDITS;
-    text_clear();
-    dim_game(1);
-    REG_BLDY = 12;
+    text_clear(TOP);
+    text_clear(BOT);
+    dim(TOP, 11);
+    button(BOT, back_button.y, back_button.w, back_button.h, back_button.label, TXT_HILITE);
     credits_scroll = 0;
-    for (credits_rows = 0; credits_rows < 21; credits_rows++) credits_write_row(credits_rows);
+    for (credits_rows = 0; credits_rows < 25; credits_rows++) credits_write_row(credits_rows);
+    text_scroll(TOP, 0);
 }
 
-static void end_credits(void)
+static void update_credits(void)
 {
-    REG_BG1VOFS = 0;
-    dim_game(0);
-    state = ST_MENU;
-    menu_sel = MAIN_CREDITS;
-    draw_title_text();
-    draw_main_menu();
-}
-
-static void update_credits(uint16_t pressed)
-{
-    if (pressed & (KEY_A | KEY_B | KEY_START)) {
-        end_credits();
+    if (button_tapped(&back_button) || (pressed & (KEY_A | KEY_B | KEY_START))) {
+        sfx_select();
+        dim(TOP, 0);
+        state = ST_TITLE;
+        menu_sel = MAIN_CREDITS;
+        draw_title_text();
         return;
     }
     // scroll until the last line sits in the middle of the screen, then hold
     int top = credits_scroll >> 3;
-    if ((frames & 1) && top < CREDITS_END - 9) credits_scroll++;
+    if ((frames & 1) && top < CREDITS_END - 11) credits_scroll++;
     top = credits_scroll >> 3;
-    while (credits_rows <= top + 20) credits_write_row(credits_rows++);
-    REG_BG1VOFS = credits_scroll & 255;
+    while (credits_rows <= top + 24) credits_write_row(credits_rows++);
+    text_scroll(TOP, credits_scroll & 255);
 }
 
-// ---------------------------------------------------------------- game setup
+// ---------------------------------------------------------------- starting play
 
 static int pick_color(void)
 {
@@ -358,39 +604,36 @@ static int pick_color(void)
     }
 }
 
-static void draw_hud(void)
-{
-    text_at(0, 0, "SCORE");
-    num_at(6, 0, score, 6);
-    if (mode == MODE_ADVENTURE) {
-        text_at(21, 0, "LEVEL");
-        num_at(27, 0, level, 2);
-    } else {
-        int secs = play_frames / 60;
-        text_at(19, 0, "TIME");
-        num_at(24, 0, secs / 60, 2);
-        text_at(26, 0, ":");
-        num_at(27, 0, secs % 60, 2);
-    }
-}
-
-static void begin_play(int layout_index, int theme, int song, int total, int ncolors)
+static void begin_play(int layout_index, int theme_index, int song, int total, int ncolors, int pow_chance)
 {
     fade(1);
     music_stop();
+    dim(BOT, 0);
+    dim(TOP, 0);
+    theme = theme_index;
     layout = &layouts[layout_index];
     chain_set_layout(layout);
-    load_bg(level_pal[layout_index][theme], level_tiles[layout_index][theme]);
+    gfx_picture(BOT, level_pic[layout_index][theme]);
+    gfx_picture(TOP, dash_pic[theme]);
     chain_init(&chain, total, ncolors, rand_next(&rng));
+    chain.pow_chance = pow_chance;
+    total_balls = total;
     cur_color = rand_next(&rng) % ncolors;
     next_color = rand_next(&rng) % ncolors;
     shot_active = 0;
-    angle = 0;
+    aim = 0;
     rolling_in = 1;
     play_frames = 0;
-    text_clear();
-    draw_hud();
+    streak = 0;
+    slow_timer = reverse_timer = 0;
+    shake_timer = 0;
+    fx_clear();
+    text_clear(BOT);
+    text_clear(TOP);
+    text_scroll(TOP, 0);
     state = ST_PLAY;
+    message(mode == MODE_ADVENTURE ? "GET READY!" : "ENDLESS!", theme_names[theme], 150);
+    draw_dashboard_text();
     fade(0);
     music_play(song);
 }
@@ -400,13 +643,11 @@ static void start_level(void)
     mode = MODE_ADVENTURE;
     level_score = score;
     record_scores();                         // remembers the furthest level reached
-    // gentle ramp: more balls and colors every level or two
-    int total = 25 + level * 5;
-    if (total > 90) total = 90;
+    int total = 30 + level * 5;
+    if (total > 110) total = 110;
     int ncolors = level < 3 ? 3 : level < 6 ? 4 : 5;
-    // each theme has its own song
-    int theme = (level - 1) % NUM_THEMES;
-    begin_play((level - 1) % NUM_LAYOUTS, theme, theme % NUM_SONGS, total, ncolors);
+    int li = (level - 1) % NUM_LAYOUTS, ti = (level - 1) % NUM_THEMES;
+    begin_play(li, ti, ti % NUM_SONGS, total, ncolors, level < 2 ? 0 : 22);
 }
 
 static void new_adventure(void)
@@ -424,7 +665,8 @@ static void start_endless(void)
     best_at_start = save.best_endless;
     score = 0;
     level = 0;
-    begin_play(ENDLESS_LAYOUT, rand_next(&rng) % NUM_THEMES, rand_next(&rng) % NUM_SONGS, -1, 4);
+    int ti = rand_next(&rng) % NUM_THEMES;
+    begin_play(ENDLESS_LAYOUT, ti, rand_next(&rng) % NUM_SONGS, -1, 4, 18);
 }
 
 static void restart(void)
@@ -442,149 +684,359 @@ static void restart(void)
 
 static int32_t chain_speed(void)
 {
-    // roll in quickly until the head is a quarter of the way along
-    // (measured from where balls leave the serpent's mouth). Endless mode
-    // does this again whenever the chain gets short, so it never sits empty.
+    if (reverse_timer > 0) return REVERSE_SPEED;
+    // roll in quickly until the head is a quarter of the way along the visible
+    // track; endless does this again whenever the chain gets short
     if (mode == MODE_ENDLESS) rolling_in = 1;
     if (rolling_in) {
-        int32_t target = (layout->hide + (layout->len - layout->hide) / 4) << 8;
-        if (chain.count == 0 || chain.pos[chain.count - 1] < target)
-            return ROLL_IN_SPEED;
+        if (chain.to_spawn != 0 && chain_danger(&chain) < 64) return ROLL_IN_SPEED;
         rolling_in = 0;
     }
+    // don't leave the track sitting empty while new balls creep out of the serpent
+    if (chain.to_spawn != 0 && chain_danger(&chain) < 20) return ROLL_IN_SPEED;
     int speed;
     if (mode == MODE_ENDLESS)
-        speed = 34 + play_frames / (60 * 15);   // a little faster every 15 seconds
+        speed = 51 + play_frames / (60 * 15);      // a little faster every 15 seconds
     else
-        speed = 24 + level * 3;
-    return speed > 80 ? 80 : speed;             // 8.8 px/frame
+        speed = 36 + level * 4;
+    if (speed > 120) speed = 120;
+    if (slow_timer > 0) speed /= 3;
+    return speed;                                  // 8.8 px/frame
 }
 
 static void fire(void)
 {
-    int a = angle >> 8;
+    int dx = isin(aim), dy = -icos(aim);
     shot_active = 1;
     shot_color = cur_color;
-    shot_x = (layout->frog_x << 8) + isin(a) * 10 / 16;
-    shot_y = (layout->frog_y << 8) - icos(a) * 10 / 16;
-    shot_vx = isin(a) * SHOT_SPEED / 16;
-    shot_vy = -icos(a) * SHOT_SPEED / 16;
+    shot_x = (layout->frog_x << 8) + dx * MOUTH / 16;
+    shot_y = (layout->frog_y << 8) + dy * MOUTH / 16;
+    shot_vx = dx * (SHOT_SPEED >> 8) / 16;
+    shot_vy = dy * (SHOT_SPEED >> 8) / 16;
+    for (int i = 0; i < 4; i++) {
+        trail_x[i] = shot_x >> 8;
+        trail_y[i] = shot_y >> 8;
+    }
     cur_color = next_color;
     next_color = pick_color();
+    sfx_shoot(layout->frog_x);
+}
+
+static void swap_balls(void)
+{
+    int t = cur_color;
+    cur_color = next_color;
+    next_color = t;
+    sfx_swap();
+}
+
+static void fix_colors(void)
+{
+    // make sure the frog isn't holding a colour that is gone
+    unsigned m = chain_colors(&chain);
+    if (m && !(m & (1u << cur_color))) cur_color = pick_color();
+    if (m && !(m & (1u << next_color))) next_color = pick_color();
 }
 
 static void update_shot(void)
 {
     if (!shot_active) return;
-    for (int step = 0; step < 2; step++) {
-        shot_x += shot_vx / 2;
-        shot_y += shot_vy / 2;
+    for (int i = 3; i > 0; i--) {
+        trail_x[i] = trail_x[i - 1];
+        trail_y[i] = trail_y[i - 1];
+    }
+    trail_x[0] = shot_x >> 8;
+    trail_y[0] = shot_y >> 8;
+    for (int step = 0; step < 4; step++) {
+        shot_x += shot_vx / 4;
+        shot_y += shot_vy / 4;
         int x = shot_x >> 8, y = shot_y >> 8;
-        if (x < -8 || x > 248 || y < -8 || y > 168) {
+        if (x < -12 || x > 268 || y < -12 || y > 204) {
             shot_active = 0;
+            streak = 0;
             return;
         }
         int hit = chain_hit(&chain, x, y);
-        if (hit >= 0 && chain.pos[hit] >= layout->hide << 8) {
+        if (hit >= 0) {
             int pts = chain_insert(&chain, hit, x, y, shot_color);
-            if (pts) sfx_match(chain.combo);
-            score += pts;
             shot_active = 0;
-            // make sure the frog isn't holding a color that is gone
-            unsigned m = chain_colors(&chain);
-            if (m && !(m & (1u << cur_color))) cur_color = pick_color();
-            if (m && !(m & (1u << next_color))) next_color = pick_color();
+            if (pts) {
+                streak++;
+                if (streak >= 3) {
+                    int bonus = 50 * streak;
+                    char b[16];
+                    put_num(put_str(b, "+"), bonus);
+                    pts += bonus;
+                    message("CHAIN BONUS", b, 90);
+                    fx_stars(x, y, 8);
+                }
+            } else {
+                streak = 0;
+                sfx_insert(x);
+            }
+            score += pts;
+            fix_colors();
             return;
         }
     }
 }
 
-static void game_over(void)
+// Turn this frame's chain events into effects, sounds and power-ups.
+static void handle_events(void)
 {
-    char buf[16] = "SCORE ";
-    state = ST_OVER;
-    sfx_over();
-    record_scores();
-    format_num(buf + 6, score, 6);
-    panel(5, 18, 8);
-    text_center(6, "GAME OVER", TXT_HILITE);
-    text_center(8, buf, TXT_PANEL);
-    if (score > best_at_start) text_center(9, "NEW BEST!", TXT_HILITE);
-    text_center(11, "PRESS START", TXT_PANEL);
+    for (int i = 0; i < chain.npopped; i++) {
+        Popped *p = &chain.popped[i];
+        fx_burst(p->x, p->y, ball_rgb[p->color], 7);
+        if (p->power == POW_BOMB) {
+            fx_ring(p->x, p->y, RGB15(31, 20, 6), 1);
+            fx_burst(p->x, p->y, RGB15(31, 24, 8), 24);
+            shake_timer = 24;
+        } else if (p->power) {
+            fx_ring(p->x, p->y, RGB15(20, 28, 31), 1);
+            fx_stars(p->x, p->y, 6);
+        }
+    }
+    for (int i = 0; i < chain.nmatches; i++) {
+        Match *m = &chain.matches[i];
+        fx_popup(m->x, m->y - 8, m->points, m->combo);
+        fx_ring(m->x, m->y, RGB15(31, 31, 31), 0);
+        sfx_match(m->combo, m->x);
+        if (m->combo >= 2) {
+            char b[16];
+            put_num(put_str(b, "COMBO X"), m->combo);
+            message(b, m->combo >= 4 ? "AMAZING!" : m->combo >= 3 ? "GREAT!" : "NICE!", 90);
+            fx_stars(m->x, m->y, 4 + m->combo * 2);
+        }
+    }
+    if (chain.contacts && !chain.nmatches) sfx_contact();
+    if (chain.triggered & (1u << POW_SLOW)) {
+        slow_timer = SLOW_FRAMES;
+        message("SLOW DOWN!", "THE CHAIN CRAWLS", 90);
+        sfx_power(POW_SLOW);
+    }
+    if (chain.triggered & (1u << POW_REVERSE)) {
+        reverse_timer = REVERSE_FRAMES;
+        message("REVERSE!", "BACK IT GOES", 90);
+        sfx_power(POW_REVERSE);
+    }
+    if (chain.triggered & (1u << POW_BOMB)) {
+        message("BOOM!", "BOMB BLAST", 90);
+        sfx_power(POW_BOMB);
+    }
+    chain_events_clear(&chain);
 }
 
-static void update_play(uint16_t pressed)
+static const Button pause_buttons[] = {
+    { 4, 16, 3, "RESUME" }, { 8, 16, 3, "RESTART" }, { 12, 16, 3, "SETTINGS" }, { 16, 16, 3, "QUIT" },
+};
+enum { PAUSE_RESUME, PAUSE_RESTART, PAUSE_SETTINGS, PAUSE_QUIT, PAUSE_COUNT };
+
+static void draw_pause_menu(void)
 {
-    if (pressed & KEY_START) {
-        state = ST_PAUSE;
-        menu_sel = PAUSE_RESUME;
-        music_stop();
-        dim_game(1);
-        draw_pause_menu();
-        return;
-    }
+    text_clear(BOT);
+    draw_buttons(pause_buttons, PAUSE_COUNT, menu_sel);
+    text_center_in(TOP, 15, 16, 19, "PAUSED", TXT_GOLD);
+}
 
-    uint16_t fine_l = save.dpad_fast ? KEY_L : KEY_LEFT;
-    uint16_t fine_r = save.dpad_fast ? KEY_R : KEY_RIGHT;
-    uint16_t fast_l = save.dpad_fast ? KEY_LEFT : KEY_L;
-    uint16_t fast_r = save.dpad_fast ? KEY_RIGHT : KEY_R;
-    if (keys & fine_l) angle -= FINE_TURN;
-    if (keys & fine_r) angle += FINE_TURN;
-    if (keys & fast_l) angle -= FAST_TURN;
-    if (keys & fast_r) angle += FAST_TURN;
-    angle &= 0xFFFF;
-
-    uint16_t shoot = save.swap_buttons ? KEY_B : KEY_A;
-    uint16_t swap = save.swap_buttons ? KEY_A : KEY_B;
-    if ((pressed & shoot) && !shot_active) {
-        fire();
-        sfx_shoot();
-    }
-    if (pressed & swap) {
-        sfx_swap();
-        int t = cur_color;
-        cur_color = next_color;
-        next_color = t;
-    }
-
-    update_shot();
-
-    play_frames++;
-    if (mode == MODE_ENDLESS && play_frames == 60 * 90) chain.ncolors = 5;
-
-    int before = score;
-    ChainState cs = chain_update(&chain, chain_speed(), &score);
-    if (score != before) sfx_match(chain.combo);
-    draw_hud();
-    if (cs == CHAIN_LOST) {
-        game_over();
-    } else if (cs == CHAIN_CLEARED) {
-        state = ST_CLEAR;
-        sfx_clear();
-        timer = 150;
-        panel(8, 16, 3);
-        text_center(9, "LEVEL CLEAR!", TXT_HILITE);
-    }
+static void pause_game(void)
+{
+    state = ST_PAUSE;
+    menu_sel = PAUSE_RESUME;
+    music_stop();
+    dim(BOT, PAUSE_DIM);
+    dim(TOP, PAUSE_DIM);
+    aiming_by_touch = 0;
+    draw_pause_menu();
 }
 
 static void resume_play(void)
 {
-    dim_game(0);
-    text_clear();
-    draw_hud();
+    dim(BOT, 0);
+    dim(TOP, 0);
+    text_clear(BOT);
     state = ST_PLAY;
     music_resume();
 }
 
-static void update_pause(uint16_t pressed)
+static const Button over_buttons[] = { { 13, 14, 3, "RETRY" }, { 17, 14, 3, "MENU" } };
+
+static void game_over(void)
 {
-    if (menu_move(pressed, PAUSE_COUNT)) draw_pause_menu();
+    char buf[24];
+    state = ST_OVER;
+    record_scores();
+    menu_sel = 0;
+    dim(BOT, 8);
+    text_clear(BOT);
+    panel(BOT, 5, 3, 22, 9);
+    text_center(BOT, 5, "GAME OVER", TXT_HILITE);
+    put_num0(put_str(buf, "SCORE "), score, 7);
+    text_center(BOT, 7, buf, TXT_PANEL);
+    if (score > best_at_start) text_center(BOT, 9, "NEW BEST!", TXT_HILITE);
+    else if (mode == MODE_ADVENTURE) {
+        put_num(put_str(buf, "REACHED LEVEL "), level);
+        text_center(BOT, 9, buf, TXT_PANEL);
+    }
+    draw_buttons(over_buttons, 2, menu_sel);
+}
+
+static void update_aim(void)
+{
+    uint32_t fine_l = save.dpad_fast ? KEY_L : KEY_LEFT;
+    uint32_t fine_r = save.dpad_fast ? KEY_R : KEY_RIGHT;
+    uint32_t fast_l = save.dpad_fast ? KEY_LEFT : KEY_L;
+    uint32_t fast_r = save.dpad_fast ? KEY_RIGHT : KEY_R;
+    if (held & fine_l) aim -= FINE_TURN;
+    if (held & fine_r) aim += FINE_TURN;
+    if (held & fast_l) aim -= FAST_TURN;
+    if (held & fast_r) aim += FAST_TURN;
+
+    int fx = layout->frog_x, fy = layout->frog_y;
+    if (tapped) {
+        int dx = tx - fx, dy = ty - fy;
+        if (dx * dx + dy * dy < 22 * 22) {
+            swap_balls();                          // tap the frog to swap
+            aiming_by_touch = 0;
+        } else {
+            aiming_by_touch = 1;
+            touch_target = aim;
+        }
+    }
+    if (aiming_by_touch && touching) {
+        int dx = tx - fx, dy = ty - fy;
+        if (dx * dx + dy * dy > 8 * 8)
+            touch_target = (int)(atan2f((float)dx, (float)-dy) * (32768.0f / (2.0f * 3.14159265f))) & 32767;
+        // turn the short way round, quickly at first and slowing as it lines up
+        int diff = ((touch_target - aim + 16384) & 32767) - 16384;
+        int step = (diff < 0 ? -diff : diff) / 6;
+        if (step < TOUCH_TURN_MIN) step = TOUCH_TURN_MIN;
+        if (step > TOUCH_TURN_MAX) step = TOUCH_TURN_MAX;
+        if (diff > step) aim += step;
+        else if (diff < -step) aim -= step;
+        else aim = touch_target;
+    }
+    aim &= 32767;
+    if (aiming_by_touch && released) {
+        aiming_by_touch = 0;
+        if (!shot_active) fire();
+    }
+}
+
+#ifdef AUTOPLAY
+// Debug builds only: aim at the nearest visible ball of the frog's colour and fire.
+static void autoplay(void)
+{
+    if (shot_active || frames % 24) return;
+    int best = -1, best_d = 1 << 30;
+    for (int i = 0; i < chain.count; i++) {
+        if (chain.pos[i] < layout->hide << 8 || chain.color[i] != cur_color) continue;
+        int x, y;
+        chain_point(chain.pos[i], &x, &y);
+        int dx = x - layout->frog_x, dy = y - layout->frog_y, d = dx * dx + dy * dy;
+        if (d < best_d) {
+            best_d = d;
+            best = i;
+        }
+    }
+    if (best < 0) {
+        swap_balls();
+        return;
+    }
+    int x, y;
+    chain_point(chain.pos[best], &x, &y);
+    aim = (int)(atan2f((float)(x - layout->frog_x), (float)(layout->frog_y - y)) * (32768.0f / 6.2831853f)) & 32767;
+    fire();
+}
+#endif
+
+static void update_play(void)
+{
+#ifdef AUTOPLAY
+    autoplay();
+#endif
+    if (pressed & KEY_START) {
+        pause_game();
+        return;
+    }
+    update_aim();
+    uint32_t shoot = save.swap_buttons ? KEY_B : KEY_A;
+    uint32_t swap = save.swap_buttons ? KEY_A : KEY_B;
+    if ((pressed & shoot) && !shot_active) fire();
+    if (pressed & swap) swap_balls();
+
+    update_shot();
+
+    play_frames++;
+    if (mode == MODE_ENDLESS && play_frames == 60 * 90) {
+        chain.ncolors = 5;
+        message("NEW COLOUR!", "PURPLE JOINS IN", 120);
+    }
+    if (slow_timer > 0) slow_timer--;
+    if (reverse_timer > 0) reverse_timer--;
+    if (msg_timer > 0) msg_timer--;
+
+    ChainState cs = chain_update(&chain, chain_speed(), &score);
+    handle_events();
+    fix_colors();
+
+    int danger = chain_danger(&chain);
+    if (danger > 200 && play_frames % 40 == 0) sfx_danger();
+    draw_dashboard_text();
+
+    if (cs == CHAIN_LOST) {
+        state = ST_DRAIN;
+        timer = 0;
+        sfx_over();
+        message("OH NO!", "INTO THE PIT", 999);
+        draw_dashboard_text();
+    } else if (cs == CHAIN_CLEARED) {
+        state = ST_CLEAR;
+        timer = 180;
+        sfx_clear();
+        message("LEVEL CLEAR!", "WELL DONE", 999);
+        draw_dashboard_text();
+    }
+}
+
+// The rest of the chain pours into the pit.
+static void update_drain(void)
+{
+    int score_dummy = 0;
+    shot_active = 0;
+    chain_update(&chain, 6 << 8, &score_dummy);
+    chain_events_clear(&chain);
+    while (chain.count > 0 && (chain.pos[chain.count - 1] >> 8) >= layout->len - 1) {
+        int x, y;
+        chain_point(chain.pos[chain.count - 1], &x, &y);
+        fx_burst(x, y, ball_rgb[chain.color[chain.count - 1]], 3);
+        if (chain.count % 3 == 0) sfx_swallow();
+        chain.count--;
+    }
+    chain.to_spawn = 0;
+    if (chain.count == 0 && ++timer > 40) game_over();
+}
+
+static void update_clear(void)
+{
+    if (timer % 12 == 0) {
+        int x = 30 + (int)(rand_next(&rng) % 196), y = 30 + (int)(rand_next(&rng) % 130);
+        fx_stars(x, y, 10);
+        fx_ring(x, y, ball_rgb[rand_next(&rng) % NUM_COLORS], 1);
+    }
+    if (--timer <= 0 || (timer < 120 && (tapped || (pressed & (KEY_A | KEY_START))))) {
+        level++;
+        start_level();
+    }
+}
+
+static void update_pause(void)
+{
     if (pressed & KEY_B) {
         resume_play();
         return;
     }
-    if (!(pressed & (KEY_A | KEY_START))) return;
-    switch (menu_sel) {
+    int pick = buttons_update(pause_buttons, PAUSE_COUNT, &menu_sel);
+    switch (pick) {
     case PAUSE_RESUME:
         resume_play();
         break;
@@ -601,66 +1053,44 @@ static void update_pause(uint16_t pressed)
     }
 }
 
-static void update_settings(uint16_t pressed)
+static void update_over(void)
 {
-    if (menu_move(pressed, SET_COUNT)) draw_settings();
-    int back = (pressed & KEY_B) || ((pressed & (KEY_A | KEY_START)) && menu_sel == SET_BACK);
-    if (!back && (pressed & (KEY_A | KEY_LEFT | KEY_RIGHT)) && menu_sel != SET_BACK) {
-        if (menu_sel == SET_AIM) save.dpad_fast ^= 1;
-        if (menu_sel == SET_BUTTONS) save.swap_buttons ^= 1;
-        save_write();
-        sfx_swap();
-        draw_settings();
-    }
-    if (!back) return;
-    text_clear();
-    if (settings_return == ST_PAUSE) {
-        state = ST_PAUSE;
-        menu_sel = PAUSE_SETTINGS;
-        draw_pause_menu();
-    } else {
-        state = ST_MENU;
-        menu_sel = MAIN_SETTINGS;
-        draw_title_text();
-        draw_main_menu();
-    }
+    int pick = buttons_update(over_buttons, 2, &menu_sel);
+    if (pick == 0) restart();
+    if (pick == 1) go_title();
 }
 
-static void update_title(uint16_t pressed)
+static void update_title(void)
 {
-    // frog looks around, "PRESS START" blinks
-    angle = ((isin(frames) * 20) >> 12) << 8;
-    angle &= 0xFFFF;
-    if (state == ST_TITLE) {
-        text_center(15, (frames & 32) ? "           " : "PRESS START", TXT_PLAIN);
-        if (pressed & (KEY_START | KEY_A)) {
-            state = ST_MENU;
-            menu_sel = MAIN_ADVENTURE;
-            text_center(15, "           ", TXT_PLAIN);
-            draw_main_menu();
+#ifdef AUTOPLAY
+    if (frames > 90) {
+        best_at_start = save.best_score;
+        score = 0;
+        if (AUTOPLAY == 0) {
+            start_endless();
+        } else {
+            level = AUTOPLAY;
+            start_level();
         }
         return;
     }
-
-    // main menu
-    if (menu_move(pressed, MAIN_COUNT)) draw_main_menu();
-    if (pressed & KEY_B) {
-        state = ST_TITLE;
-        draw_title_text();
-        return;
-    }
-    if (!(pressed & (KEY_A | KEY_START))) return;
-    switch (menu_sel) {
+#endif
+    int pick = buttons_update(title_buttons, MAIN_COUNT, &menu_sel);
+    switch (pick) {
     case MAIN_ADVENTURE:
+        sfx_select();
         new_adventure();
         break;
     case MAIN_ENDLESS:
+        sfx_select();
         start_endless();
         break;
     case MAIN_SETTINGS:
-        open_settings(ST_MENU);
+        sfx_select();
+        open_settings(ST_TITLE);
         break;
     case MAIN_CREDITS:
+        sfx_select();
         start_credits();
         break;
     }
@@ -668,46 +1098,47 @@ static void update_title(uint16_t pressed)
 
 int main(void)
 {
-    init_video();
+#ifdef DEBUGHUD
+    defaultExceptionHandler();
+#endif
+    gfx_init();
+    scene_init();
     sound_init();
     save_load();
     layout = &layouts[0];
     go_title();
 
     for (;;) {
-        prev_keys = keys;
-        keys = ~REG_KEYINPUT & 0x03FF;
-        uint16_t pressed = keys & ~prev_keys;
-        rand_next(&rng);
-
+        read_input();
         switch (state) {
         case ST_TITLE:
-        case ST_MENU:
-            update_title(pressed);
+            update_title();
             break;
         case ST_SETTINGS:
-            update_settings(pressed);
+            update_settings();
             break;
         case ST_CREDITS:
-            update_credits(pressed);
+            update_credits();
             break;
         case ST_PLAY:
-            update_play(pressed);
+            update_play();
             break;
         case ST_PAUSE:
-            update_pause(pressed);
+            update_pause();
             break;
         case ST_CLEAR:
-            if (--timer <= 0) {
-                level++;
-                start_level();
-            }
+            update_clear();
+            break;
+        case ST_DRAIN:
+            update_drain();
             break;
         case ST_OVER:
-            if (pressed & KEY_START) go_title();
+            update_over();
             break;
         }
-
+#ifdef DEBUGHUD
+        text_num(TOP, 24, 0, frames, 7, TXT_PLAIN);
+#endif
         frame();
     }
 }

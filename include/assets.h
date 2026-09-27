@@ -4,35 +4,70 @@
 
 #include <stdint.h>
 
-#define TITLE_FROG_X 120
-#define TITLE_FROG_Y 100
-#define FROG_TILE 4
-#define NUM_COLORS 5
-#define FROG_PALBANK 5
-#define FONT_CHARS " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ:!->"
-#define FONT_NCHARS 41
-#define FRAME_TILE 164
+// ---- tracks
 #define NUM_LAYOUTS 6
 #define NUM_THEMES 5
-#define BG_FIRST_COLOR 32
-#define BG_IMG_WORDS 9600
+#define BALL_PX 12
+#define BALL_ROLL_PX 19
+#define NUM_COLORS 5
 
 typedef struct {
+    const char *name;
     const int16_t *x, *y;   // path points, 1px apart
+    const uint16_t *angle;  // rolling direction at each point (32768 a turn)
     int16_t len;
     int16_t hide;           // balls before this point are inside the serpent
     int16_t frog_x, frog_y;
 } Layout;
 
 extern const Layout layouts[NUM_LAYOUTS];
-extern const int16_t sin_tab[256];
+extern const char *const theme_names[NUM_THEMES];
+extern const uint16_t ball_rgb[NUM_COLORS];     // for tinting sparks
+
+// ---- LZ77-compressed 256x192 RGB15 pictures (data/*.bin)
+extern const uint8_t *const level_pic[NUM_LAYOUTS][NUM_THEMES];
+extern const uint8_t *const dash_pic[NUM_THEMES];
+extern const uint8_t *const title_top_pic, *const title_bottom_pic;
+
+// ---- 3D textures (8-bit, colour 0 transparent)
+#define TEX_BALL(color, frame) ((color) * 8 + (frame))   // 16x16 tiles in tex_balls
+#define BALL_FRAMES 8
+#define TEX_HIGHLIGHT 40
+#define TEX_POW_SLOW 41
+#define TEX_POW_REVERSE 42
+#define TEX_POW_BOMB 43
+#define TEX_GLOW 44
+#define TEX_SPARK 45
+#define TEX_DOT 46
+#define TEX_SHADOW 47
+#define TEX_STAR 48
+#define TEX_POW(p) (TEX_POW_SLOW + (p) - 1)
+#define NUM_BALL_TILES 49
+#define POPUP_CHARS "0123456789+X!"
+extern const uint16_t tex_balls_pal[256], tex_frog_pal[256], tex_font_pal[256], tex_ring_pal[256];
+extern const uint8_t tex_balls[128 * 128], tex_frog[128 * 64], tex_font[128 * 8], tex_ring[32 * 32];
+
+// ---- text layers
+#define FONT_CHARS " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ:!->+=.\',%/"
+#define FONT_NCHARS 48
+#define FRAME_TILE 288
+#define BAR_TILE(n, kind) (296 + (kind) * 9 + (n))   // n of 8 pixels full; teal, gold, red
+#define BIGDIGIT_TILE(d) (323 + (d) * 6)       // 2x3 tile digit cell: TL, TR, ML, MR, BL, BR
 extern const uint16_t font_pal[16];
-extern const uint16_t obj_pal[96];
-extern const uint16_t title_pal[256];
-extern const uint32_t title_tiles[BG_IMG_WORDS];
-extern const uint16_t *const level_pal[NUM_LAYOUTS][NUM_THEMES];
-extern const uint32_t *const level_tiles[NUM_LAYOUTS][NUM_THEMES];
-extern const uint32_t obj_tiles[160];
-extern const uint32_t font_tiles[1376];
+extern const uint32_t font_tiles[3064];
+
+// ---- top screen sprites (4bpp)
+#define SUB_TILE_BALL 0                 // 32x32, palette = colour
+#define SUB_TILE_POW(p) (16 + ((p) - 1) * 4)   // 16x16
+#define PAL_SUB_UI 5
+extern const uint16_t sub_pal[256];
+extern const uint32_t sub_tiles[224];
+
+// ---- top screen layout (text rows), matching the dashboard pictures
+#define DASH_HEADER_ROW 0
+#define DASH_SCORE_ROW 3
+#define DASH_PROGRESS_ROW 10
+#define DASH_DANGER_ROW 14
+#define DASH_BALLS_ROW 18
 
 #endif

@@ -1,13 +1,14 @@
+#include <fat.h>
+#include <stdio.h>
+#include <string.h>
 #include "save.h"
 
-#define SRAM ((volatile uint8_t *)0x0E000000)
-#define SAVE_MAGIC 0x414D555Au    // "ZUMA" - the original name, kept so old saves still load
+#define SAVE_PATH "fat:/zoomer-ds.sav"
+#define SAVE_MAGIC 0x53445A5Au    // "ZZDS"
 #define SAVE_VERSION 1
 
-// Emulators and flash carts look for this string to pick the save type.
-__attribute__((used, aligned(4))) const char save_type_tag[] = "SRAM_V113";
-
 SaveData save;
+int save_available;
 
 typedef struct {
     uint32_t magic;
@@ -27,40 +28,40 @@ static uint32_t checksum(const SaveBlock *b)
 
 static void defaults(void)
 {
-    save.best_score = 0;
-    save.best_level = 0;
-    save.best_endless = 0;
+    memset(&save, 0, sizeof(save));
     save.dpad_fast = 1;
-    save.swap_buttons = 0;
+    save.guide = 1;
 }
 
 void save_load(void)
 {
-    // touch the tag so the linker can't discard it
-    volatile const char *tag = save_type_tag;
-    (void)tag[0];
-
+    defaults();
+    save_available = fatInitDefault();
+    if (!save_available) return;
     SaveBlock b;
-    uint8_t *p = (uint8_t *)&b;
-    // SRAM is on an 8-bit bus: byte reads only
-    for (unsigned i = 0; i < sizeof(b); i++) p[i] = SRAM[i];
-    if (b.magic != SAVE_MAGIC || b.version != SAVE_VERSION || b.checksum != checksum(&b)) {
-        defaults();
-        return;
+    FILE *f = fopen(SAVE_PATH, "rb");
+    if (!f) return;
+    int ok = fread(&b, sizeof(b), 1, f) == 1;
+    fclose(f);
+    if (ok && b.magic == SAVE_MAGIC && b.version == SAVE_VERSION && b.checksum == checksum(&b)) {
+        save = b.data;
+        save.dpad_fast = save.dpad_fast ? 1 : 0;
+        save.swap_buttons = save.swap_buttons ? 1 : 0;
+        save.guide = save.guide ? 1 : 0;
     }
-    save = b.data;
-    save.dpad_fast = save.dpad_fast ? 1 : 0;
-    save.swap_buttons = save.swap_buttons ? 1 : 0;
 }
 
 void save_write(void)
 {
+    if (!save_available) return;
     SaveBlock b;
-    const uint8_t *p = (const uint8_t *)&b;
-    for (unsigned i = 0; i < sizeof(b); i++) ((uint8_t *)&b)[i] = 0;
+    memset(&b, 0, sizeof(b));
     b.magic = SAVE_MAGIC;
     b.version = SAVE_VERSION;
     b.data = save;
     b.checksum = checksum(&b);
-    for (unsigned i = 0; i < sizeof(b); i++) SRAM[i] = p[i];
+    FILE *f = fopen(SAVE_PATH, "wb");
+    if (!f) return;
+    fwrite(&b, sizeof(b), 1, f);
+    fclose(f);
 }
