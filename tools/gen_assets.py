@@ -1447,44 +1447,6 @@ def upscale(img, k):
     return [[img[y // k][x // k] for x in range(len(img[0]) * k)] for y in range(len(img) * k)]
 
 
-def portrait(expr):
-    """64x64 frog face (used for the DS menu icon): happy, wow or worry."""
-    img = rgba_canvas(64, 64)
-    C = FROG_COLS
-    for y in range(64):
-        for x in range(64):
-            d = math.hypot((x + 0.5 - 32) / 1.15, y + 0.5 - 38)
-            if d < 24:
-                img[y][x] = C["outline"] if d > 22.5 else (C["body"] if y > 30 or d < 18 else C["light"])
-    for ex in (18, 46):
-        for y in range(64):
-            for x in range(64):
-                d = math.hypot(x + 0.5 - ex, y + 0.5 - 20)
-                if d < 10:
-                    img[y][x] = C["outline"] if d > 8.5 else C["eye"]
-                    py = 20 if expr != "worry" else 23
-                    if math.hypot(x + 0.5 - ex, y + 0.5 - py) < (4.5 if expr == "wow" else 3.5):
-                        img[y][x] = C["pupil"]
-        if expr == "worry":
-            for k in range(8):
-                img[9 + k // 3][ex - 4 + k] = C["outline"]
-    for y in range(64):
-        for x in range(64):
-            dx, dy = x + 0.5 - 32, y + 0.5 - 44
-            if expr == "happy" and abs(dy - 4 + (dx * dx) / 50) < 1.2 and abs(dx) < 13:
-                img[y][x] = C["outline"]
-            if expr == "wow" and math.hypot(dx / 1.2, dy - 2) < 6:
-                img[y][x] = C["outline"] if math.hypot(dx / 1.2, dy - 2) > 4.8 else C["mouth"]
-            if expr == "worry" and abs(dy - 1 - (dx * dx) / 60) < 1.2 and abs(dx) < 11:
-                img[y][x] = C["outline"]
-    for sx in (14, 50):
-        for y in range(64):
-            for x in range(64):
-                if expr != "worry" and math.hypot(x + 0.5 - sx, y + 0.5 - 40) < 3:
-                    img[y][x] = (240, 140, 140)
-    return img
-
-
 def icon16(kind):
     base = disc_img(16, 8, 8, 7.5, lambda d: (20, 14, 10) if d > 6.5 else (240, 196, 60))
     ic = icon_img(kind)
@@ -1596,9 +1558,39 @@ def write_icon_bmp(path, img, pal):
         f.write(hdr + info + colours + rows)
 
 
-face = to_ui(portrait("happy"))
-write_icon_bmp(os.path.join(ROOT, "icon.bmp"),
-               [[face[min(63, y * 2 + 1)][x * 2] for x in range(32)] for y in range(32)], UI_PAL)
+def icon_face():
+    """The frog's face drawn pixel by pixel at 32x32 (shrinking bigger art loses
+    the one-pixel details), in UI_PAL colours."""
+    C = FROG_COLS
+    img = [[None] * 32 for _ in range(32)]
+    for y in range(32):
+        for x in range(32):
+            d = math.hypot((x + 0.5 - 16) / 14.5, (y + 0.5 - 20) / 11)
+            if d < 1:
+                img[y][x] = C["outline"] if d > 0.9 else C["light"] if y < 15 else C["body"]
+                if math.hypot((x + 0.5 - 16) / 8, (y + 0.5 - 25) / 4.5) < 1:
+                    img[y][x] = C["belly"]
+    for ex in (9, 23):
+        for y in range(32):
+            for x in range(32):
+                d = math.hypot(x + 0.5 - ex, y + 0.5 - 9)
+                if d < 6:
+                    img[y][x] = C["outline"] if d > 4.9 else C["eye"]
+                    if math.hypot(x + 0.5 - (ex + (1 if ex < 16 else -1)), y + 0.5 - 9.5) < 2.3:
+                        img[y][x] = C["pupil"]
+        img[7][ex - 1 if ex < 16 else ex - 2] = C["eye"]          # glint
+    prev = None
+    for x in range(9, 24):                                     # smile
+        y = round(20 - (x - 16) ** 2 / 16)
+        for yy in range(min(y, prev if prev is not None else y), max(y, prev if prev is not None else y) + 1):
+            img[yy][x] = C["outline"]
+        prev = y
+    for cx in (6, 26):                                         # cheeks
+        img[19][cx] = img[19][cx - 1] = C["mouth"]
+    return img
+
+
+write_icon_bmp(os.path.join(ROOT, "icon.bmp"), to_ui(icon_face()), UI_PAL)
 
 # ================================================================ render the pictures
 os.makedirs(os.path.join(ROOT, "data"), exist_ok=True)
